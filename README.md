@@ -1,7 +1,7 @@
 # Solar Sail Simulator
 
-An interactive solar-sail performance simulator for **Earth-orbit and Earth-Moon
-mission analysis**. Runs entirely in the browser: no backend, no database, no
+An interactive solar-sail performance simulator for **Earth-orbit, Earth-Moon
+and interplanetary mission analysis**. Runs entirely in the browser: no backend, no database, no
 account. Configure a spacecraft and a sail, choose a steering law, run a
 trajectory, and watch the orbit evolve.
 
@@ -44,7 +44,7 @@ services to start.
 | `npm start` | Alias for `npm run dev` |
 | `npm run build` | Typecheck and produce a static bundle in `dist/` |
 | `npm run preview` | Serve the built bundle locally |
-| `npm test` | Run the validation suite (173 tests) |
+| `npm test` | Run the validation suite (299 tests) |
 | `npm run test:watch` | Validation suite in watch mode |
 | `npm run typecheck` | TypeScript only, no emit |
 
@@ -56,7 +56,7 @@ Requires Node 20 or newer.
 
 Already live at **https://nic4wtf.github.io/solar-sail-simulator/**, published
 by `.github/workflows/deploy.yml` on every push to `main`. The workflow
-typechecks, runs all 173 tests, builds, and only then publishes — so a broken
+typechecks, runs all 299 tests, builds, and only then publishes — so a broken
 commit cannot reach the live site.
 
 To set this up on a fork:
@@ -275,7 +275,8 @@ Full derivations are in [`docs/`](docs/). Summary:
 
 ```
 dr/dt = v
-dv/dt = a_central + a_J2 + a_moon + a_sun + a_srp
+dv/dt = a_central + a_J2 + a_J3 + a_moon + a_sun
+        + a_planets + a_srp + a_drag + a_earthrad
 
 a_central = -mu r / |r|^3
 a_3       = mu_3 [ (s - r)/|s - r|^3  -  s/|s|^3 ]
@@ -328,32 +329,75 @@ Frames are never implicitly mixed.
 
 ## Enabled and disabled effects
 
-| Effect | v1 |
+| Effect | Status |
 | --- | --- |
-| Earth / Moon point-mass gravity | ✅ |
+| Earth / Moon / **Sun** point-mass gravity | ✅ (switchable integration centre) |
+| Planetary third-body gravity | ✅ (Standish ephemerides, all eight planets) |
 | Earth J2 oblateness | ✅ |
+| Earth J3 pear-shape term | ✅ (off by default) |
 | Sun and Moon third-body gravity | ✅ (toggleable) |
 | Solar radiation pressure, non-ideal sail | ✅ |
 | Eclipse — dual-cone umbra + penumbra | ✅ (on by default) |
-| Atmospheric drag | ❌ |
-| Earth albedo and infrared pressure | ❌ |
-| Gravity harmonics beyond J2 | ❌ |
+| Atmospheric drag, with the sail as the drag area | ✅ (on by default for Earth orbits) |
+| Earth albedo radiation pressure | ✅ (on by default for Earth orbits) |
+| Earth infrared radiation pressure | ✅ (on by default for Earth orbits) |
+| Gravity harmonics beyond J3 (incl. J22) | ❌ |
+| Sphere-of-influence patching (the centre never changes mid-run) | ❌ |
+| Departure hyperbolas, launch windows, arrival manoeuvres | ❌ |
+| Solar thermal limits, coronal drag | ❌ |
+| Thermospheric winds, diurnal bulge, geomagnetic storms | ❌ |
 | Lunar gravity harmonics | ❌ |
 | Attitude dynamics, control authority limits | ❌ |
 | Sail billow, wrinkling, degradation | ❌ |
 | Relativistic corrections | ❌ |
 
-**Eclipse is in v1 on purpose.** In a 500 km orbit the spacecraft is shadowed
-for ~35% of every revolution; omitting it would overstate the available sail
-impulse by about a third, so the headline feasibility numbers would simply be
-wrong. It remains toggleable so the cost can be measured.
+**Eclipse is on by default on purpose.** In a 500 km orbit the spacecraft is
+shadowed for ~35% of every revolution; omitting it would overstate the
+available sail impulse by about a third, so the headline feasibility numbers
+would simply be wrong. It remains toggleable so the cost can be measured.
+
+**Drag is on by default for the same reason, and it goes further: it changes
+the sign of the LEO answer.** For a conventional satellite drag is a fixed
+ballistic coefficient times a density. For a sail it is coupled to the control
+variable, because *the sail is the drag area* — the same projection that sets
+how much sunlight the sail catches sets how much atmosphere it catches, taken
+against the relative wind instead of the Sun line. The default 100 m² / 100 kg
+sail runs a ballistic coefficient of 0.45 kg/m² broadside against 45.5 kg/m²
+edge-on, so its own attitude law has a 100× say in how fast it decays. That
+coupling is what makes deorbit sails work.
+
+In the default 500 km scenario over 7 days:
+
+| Quantity | Sail only | With drag |
+| --- | --- | --- |
+| Change in mean semi-major axis | +901 m | −15.4 km |
+| Sail impulse | 0.96 m/s | 0.96 m/s |
+| Drag impulse | — | 9.19 m/s |
+
+The atmosphere removes about ten times the impulse the sail supplies. No
+steering law fixes that — at this altitude a sail this large is a deorbit
+device, and the tool now says so rather than reporting an orbit-raising figure
+that a real spacecraft would never see. Switch drag off to measure a steering
+law on its own.
 
 ---
 
 ## Known limitations
 
-- **No atmospheric drag.** Below roughly 400 km, drag exceeds the sail force by
-  orders of magnitude. Results there are illustrative only, and the app warns.
+- **The atmosphere model is static and is now the dominant LEO uncertainty.**
+  Density comes from a piecewise-exponential fit to the US Standard Atmosphere
+  1976 / CIRA-72, with a blunt ×0.4 / ×1 / ×3 solar-activity multiplier. Real
+  thermospheric density spans an order of magnitude over the solar cycle, a
+  factor of two between day and night, and jumps during geomagnetic storms.
+  **A decay estimate from this model is a scale, not a date** — run both
+  activity extremes and treat the spread as the answer.
+- **No aerodynamic lift**, and no variation of the drag coefficient with
+  incidence angle.
+- **Earth albedo uses a single global mean** (0.30) and a phase model
+  interpolated between two closed-form limits — good to ~3% at full phase over
+  the subsolar point, much worse near the terminator where the flux is small.
+  The sail's visible-band optical coefficients are also applied unchanged to
+  Earth thermal infrared.
 - **Simplified lunar ephemeris.** A truncated ELP2000 series (~150 km position
   error), not a JPL kernel. Lunar closest-approach distances are indicative to
   a few hundred km at best. A circular model (~47,000 km error) is also
@@ -378,13 +422,41 @@ wrong. It remains toggleable so the cost can be measured.
 
 ## Validation
 
-`npm test` runs 173 tests across six suites. Highlights:
+`npm test` runs 299 tests across eight suites. Highlights:
 
 - **Two-body conservation** — a circular orbit stays circular; energy and
   angular momentum hold to 2.4e-8 relative over 7 days (0.16 m of semi-major
   axis); the state closes to under 1 m after 20 exact revolutions.
 - **J2 nodal regression** matches the analytic `-3/2 n J2 (Re/p)² cos i` to
   better than 1%.
+- **J2 and J3 accelerations** are checked against a numerical gradient of the
+  potential they claim to come from, at six positions — not against each
+  other, which is how a sign slip survives.
+- **Drag never does positive work** (`a · v < 0`) across 40 sampled states,
+  altitudes and sail orientations. It is the only dissipative term in the
+  model, so a sign error anywhere in the relative-velocity construction would
+  show up as an orbit that gains energy.
+- **Atmospheric density** matches the Vallado Table 8-4 values at nine band
+  bases from 0 to 1000 km, falls monotonically to the cutoff, and drops by
+  exactly 1/e over one scale height.
+- **Earth infrared** reproduces the exact uniform-sphere result `M (Re/r)²` and
+  keeps pushing in eclipse, where every other radiation term is zero.
+- **Planetary ephemerides** match published semi-major axes and sidereal
+  periods for all eight planets, obey Kepler's third law against the solar GM,
+  stay between perihelion and aphelion over a century, and reproduce the Earth
+  perihelion and aphelion distances *and dates*.
+- **The β = 0.5 escape threshold** — a Sun-facing sail reduces effective solar
+  gravity to `mu(1 - beta)`, so a circular orbit escapes at exactly β = 0.5.
+  The suite builds sails either side of it and checks that one escapes and the
+  other returns at the analytically predicted 2.5 AU apoapsis.
+- **Heliocentric two-body conservation** holds the semi-major axis to 1e-10
+  relative over a year, at a scale 24,000× the geocentric case.
+
+> The Earth cross-check caught a **real bug**: the planetary elements are
+> referred to the equinox of J2000 while the existing solar and lunar series
+> work in the equinox of date, so the planets were rotated against the Sun by
+> 0.7° by 2050 — 1.8 million km at 1 AU, and completely invisible in a
+> trajectory plot.
 - **Radiation pressure** — `P(1 AU) = 4.563 µN/m²`, exact inverse-square
   scaling, spot-checked at Venus and Mars distances.
 - **Ideal-sail reduction** — the optical model collapses to `2 P A cos²α` with
@@ -426,8 +498,8 @@ src/
 │   ├── vec3.ts               3-vector helpers
 │   ├── units.ts              The ONLY SI <-> display conversion layer
 │   ├── orbital/              Elements, anomaly solvers, reference frames
-│   ├── environment/          Time, Sun, Moon, eclipse, body assembly
-│   ├── forces/               Gravity, J2, SRP, force-model aggregator
+│   ├── environment/          Time, Sun, Moon, planets, atmosphere, eclipse
+│   ├── forces/               Gravity, J2/J3, SRP, drag, albedo, aggregator
 │   ├── sail/                 Sail configuration and derived performance
 │   ├── attitude/             Rule framework, optimal steering, expressions
 │   └── integrator/           RK4 and Dormand-Prince 5(4)
@@ -468,7 +540,8 @@ Total bundle: ~625 KB gzipped, in three cacheable chunks.
 | [`docs/orbital-mechanics.md`](docs/orbital-mechanics.md) | Elements, frames, conversions |
 | [`docs/solar-sail-model.md`](docs/solar-sail-model.md) | Full SRP derivation |
 | [`docs/attitude-rules.md`](docs/attitude-rules.md) | Every steering law |
-| [`docs/earth-model.md`](docs/earth-model.md) | Earth gravity, J2, eclipse |
+| [`docs/earth-model.md`](docs/earth-model.md) | Earth gravity, J2/J3, drag, albedo, eclipse |
+| [`docs/interplanetary-model.md`](docs/interplanetary-model.md) | Heliocentric frame, planetary ephemerides, lightness number |
 | [`docs/lunar-model.md`](docs/lunar-model.md) | Lunar ephemeris and assumptions |
 | [`docs/validation.md`](docs/validation.md) | Test results and error budgets |
 | [`docs/future-work.md`](docs/future-work.md) | Roadmap, incl. interplanetary |
@@ -479,22 +552,36 @@ with what is actually being computed.
 
 ---
 
-## Roadmap
+## Roadmap and versioning
 
-**v1.x** — atmospheric drag, Earth albedo and infrared pressure, higher-order
-gravity harmonics, Web Worker propagation.
+Planned work carries a **stable tag** — `ATM-MSIS`, `OPT-EVO`, `GRAV-J22` —
+rather than a version tier. Tags are **unordered**: the next feature is
+whichever one is most valuable at the time, not whichever is next in a list.
+The full index, with the seam each item plugs into, is in
+[`docs/future-work.md`](docs/future-work.md).
 
-**v2** — JPL ephemerides, refined optical sail models, trajectory optimisation
-(differential evolution / genetic algorithms), target-orbit and constraint
-handling.
+| Change | Bump |
+| --- | --- |
+| A feature — one tag lands | **MINOR** (1.3.0 → 1.4.0) |
+| A bug fix or correction | **PATCH** (1.3.0 → 1.3.1) |
+| A change that breaks saved configurations | **MAJOR** (1.x.y → 2.0.0) |
 
-**v3** — interplanetary missions, solar escape, multiple spacecraft, formation
-flying, sail degradation, flexible sail dynamics.
+The major bump is tied to one concrete thing: whether `configFromJson` can
+still migrate an old saved `SimulationConfig` forward. Drag, Earth radiation,
+J3 and the entire heliocentric mode all shipped without breaking a saved file.
 
-**v4** — other propulsion concepts (electrodynamic tethers, beamed energy).
+**Shipped so far** — `ATM-EXP` (sail-coupled atmospheric drag), `RAD-EARTH`
+(Earth albedo and infrared), `GRAV-J3`, `UI-BUILDER` (one-screen mission
+builder), `EPH-PLANETS` (planetary ephemerides), `FRAME-HELIO` (the Sun as an
+integration centre), `VIZ-SCALE` (AU-scale visualisation).
 
-None of these are implemented. See [`docs/future-work.md`](docs/future-work.md)
-for how each fits the existing architecture.
+**Largest open items** — `ATM-MSIS` (a real thermosphere model, now the
+biggest uncertainty in any LEO result), `OPT-EVO` (trajectory optimisation),
+`TRAJ-LAUNCH` (launch windows and arrival targeting), `TRAJ-SOI`
+(sphere-of-influence patching), `EPH-JPL` (JPL lunar kernels).
+
+Deliberately beyond scope, and tagged only because the original specification
+named them: `PROP-TETHER`, `PROP-BEAMED`, `PROP-AIR`.
 
 ---
 

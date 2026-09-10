@@ -215,7 +215,7 @@ function TopBar() {
       <div className="topbar">
         <div className="brand">
           <span className="brand-name">Solar Sail Simulator</span>
-          <span className="brand-version">v1.0</span>
+          <span className="brand-version">v{__APP_VERSION__}</span>
         </div>
 
         <span className="small muted" title={config.name}>

@@ -1,8 +1,8 @@
 {
   "name": "solar-sail-simulator",
   "private": true,
-  "version": "1.0.0",
-  "description": "Interactive solar sail performance simulator for Earth-orbit and Earth-Moon mission analysis",
+  "version": "1.3.0",
+  "description": "Interactive solar sail performance simulator for Earth-orbit, Earth-Moon and interplanetary mission analysis",
   "license": "MIT",
   "type": "module",
   "scripts": {
