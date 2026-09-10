@@ -16,7 +16,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { R_EARTH, R_MOON } from '../../core/constants.ts';
-import { selectPalette, useStore } from '../../state/store.ts';
+import { interpolatedState, selectPalette, useStore } from '../../state/store.ts';
 import { type ThemePalette, PALETTES } from '../theme.ts';
 import { moonPosition } from '../../core/environment/moon.ts';
 import { sunDirection } from '../../core/environment/sun.ts';
@@ -501,6 +501,11 @@ export function Scene3D() {
     ro.observe(mount);
 
     let raf = 0;
+    // Real-time clock for playback. The rate is expressed in simulation
+    // seconds per real second, so the loop must measure elapsed wall time
+    // rather than counting frames - otherwise the speed would vary with the
+    // display refresh rate.
+    let lastFrameMs = performance.now();
     const tmp = {
       v1: new THREE.Vector3(),
       v2: new THREE.Vector3(),
@@ -523,9 +528,18 @@ export function Scene3D() {
 
       controls.update();
 
+      // Advance playback from measured wall time.
+      const nowMs = performance.now();
+      const frameDt = (nowMs - lastFrameMs) / 1000;
+      lastFrameMs = nowMs;
+      if (st.runState === 'playing') st.advancePlayback(frameDt);
+
       if (res && res.samples.length > 0) {
         const idx = Math.min(st.cursor, res.samples.length - 1);
         const s = res.samples[idx];
+        // Interpolated position and vectors, so slow playback glides rather
+        // than stepping between samples.
+        const view = interpolatedState(st) ?? s;
         const isMoonCentred = res.config.centralBody === 'moon';
 
         // --- Body positions -------------------------------------------
@@ -576,9 +590,9 @@ export function Scene3D() {
         placeMarker(moonMarker, moon.position, R_MOON * S, moon.visible);
 
         // --- Spacecraft ------------------------------------------------
-        const px = s.x * S;
-        const py = s.y * S;
-        const pz = s.z * S;
+        const px = view.x * S;
+        const py = view.y * S;
+        const pz = view.z * S;
         craftGroup.position.set(px, py, pz);
 
         // Sizes are driven by the camera distance so the marker, the sail and
@@ -593,7 +607,7 @@ export function Scene3D() {
         sailPlane.scale.set(sailSize, sailSize, 1);
 
         // Orient the sail plane so its face normal is the sail normal.
-        tmp.v1.set(s.nx, s.ny, s.nz).normalize();
+        tmp.v1.set(view.nx, view.ny, view.nz).normalize();
         tmp.q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tmp.v1);
         sailPlane.setRotationFromQuaternion(tmp.q);
 
@@ -622,9 +636,9 @@ export function Scene3D() {
           // force (eclipse or edge-on) rather than drawn as a zero-length
           // stub, because an arrow that is present but tiny reads as "small
           // force" when the truth is "no force at all".
-          const aMag = Math.hypot(s.ax, s.ay, s.az);
+          const aMag = Math.hypot(view.ax, view.ay, view.az);
           if (aMag > 1e-14) {
-            tmp.v2.set(s.ax / aMag, s.ay / aMag, s.az / aMag);
+            tmp.v2.set(view.ax / aMag, view.ay / aMag, view.az / aMag);
             vectors.accel.setDirection(tmp.v2);
             vectors.accel.setLength(vLen * 0.75, vLen * 0.2, vLen * 0.1);
             vectors.accel.visible = true;
@@ -664,25 +678,11 @@ export function Scene3D() {
           controls.target.copy(earth.position);
         }
 
-        // --- Advance playback ------------------------------------------
-        if (st.runState === 'playing') {
-          // Samples per frame, from the speed multiplier. Sub-1 speeds
-          // accumulate fractionally so slow motion is smooth.
-          acc += st.playbackSpeed;
-          if (acc >= 1) {
-            const step = Math.floor(acc);
-            acc -= step;
-            st.stepCursor(step);
-          }
-        } else {
-          acc = 0;
-        }
       }
 
       renderer.render(scene, camera);
     };
 
-    let acc = 0;
     raf = requestAnimationFrame(tick);
 
     refs.current = {

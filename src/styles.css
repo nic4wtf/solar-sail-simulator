@@ -1345,3 +1345,62 @@ textarea.text-input {
     display: none;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Playback rate control                                              */
+/* ------------------------------------------------------------------ */
+
+.rate-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--bg-2);
+  padding: 2px 8px 2px 0;
+  flex-shrink: 0;
+}
+
+.rate-slider {
+  width: 96px;
+  accent-color: var(--accent);
+}
+
+/*
+ * Fixed width and tabular figures so the readout does not shove the presets
+ * sideways as the rate changes - the label cycles through "1:1", "10 min/s"
+ * and "1.5 d/s", which differ a lot in width.
+ */
+.rate-readout {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-0);
+  min-width: 62px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-note {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.timeline-warn {
+  color: var(--warn);
+}
+
+/* Below this the timeline wraps; drop the least essential parts first. */
+@media (max-width: 1500px) {
+  .timeline-note {
+    display: none;
+  }
+}
+
+@media (max-width: 1300px) {
+  .rate-slider {
+    width: 64px;
+  }
+}

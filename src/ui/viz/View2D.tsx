@@ -18,7 +18,7 @@ import { R_EARTH, R_MOON } from '../../core/constants.ts';
 import { type Vec3, cross, norm, unit } from '../../core/vec3.ts';
 import { moonPosition } from '../../core/environment/moon.ts';
 import { sunDirection } from '../../core/environment/sun.ts';
-import { selectPalette, useStore } from '../../state/store.ts';
+import { interpolatedState, selectPalette, useStore } from '../../state/store.ts';
 import { PALETTES } from '../theme.ts';
 
 type Projection = 'xy' | 'xz' | 'yz' | 'orbit';
@@ -110,7 +110,9 @@ export function View2D() {
     if (!parent) return;
 
     let raf = 0;
-    let acc = 0;
+    // See the note in Scene3D: playback is driven by measured wall time so
+    // the rate is independent of the display refresh rate.
+    let lastFrameMs = performance.now();
 
     const resize = () => {
       const dpr = Math.min(window.devicePixelRatio, 2);
@@ -141,6 +143,11 @@ export function View2D() {
       const st = useStore.getState();
       const res = st.result;
 
+      const nowMs = performance.now();
+      const frameDt = (nowMs - lastFrameMs) / 1000;
+      lastFrameMs = nowMs;
+      if (st.runState === 'playing') st.advancePlayback(frameDt);
+
       if (!res || res.samples.length === 0) {
         ctx.fillStyle = COLORS.text;
         ctx.font = `${13 * dpr}px system-ui, sans-serif`;
@@ -152,6 +159,8 @@ export function View2D() {
       const samples = res.samples;
       const idx = Math.min(st.cursor, samples.length - 1);
       const s = samples[idx];
+      // Interpolated for smooth motion at slow playback rates.
+      const view = interpolatedState(st) ?? s;
       const centre = res.config.centralBody;
       const bodyRadius = centre === 'earth' ? R_EARTH : R_MOON;
 
@@ -262,8 +271,8 @@ export function View2D() {
       }
 
       // --- Spacecraft and vectors ----------------------------------------
-      const sx = px(s);
-      const sy = py(s);
+      const sx = px(view);
+      const sy = py(view);
 
       if (st.showVectors) {
         const L = Math.min(W, H) * 0.11;
@@ -298,15 +307,16 @@ export function View2D() {
 
         const sd = sunDirection(s.jd);
         arrow(sd[0], sd[1], sd[2], COLORS.sun, L);
-        arrow(s.nx, s.ny, s.nz, COLORS.normal, L * 0.9);
+        arrow(view.nx, view.ny, view.nz, COLORS.normal, L * 0.9);
         const vm = Math.hypot(s.vx, s.vy, s.vz) || 1;
         arrow(s.vx / vm, s.vy / vm, s.vz / vm, COLORS.velocity, L * 0.9);
-        const am = Math.hypot(s.ax, s.ay, s.az);
-        if (am > 1e-14) arrow(s.ax / am, s.ay / am, s.az / am, COLORS.accel, L * 0.75);
+        const am = Math.hypot(view.ax, view.ay, view.az);
+        if (am > 1e-14)
+          arrow(view.ax / am, view.ay / am, view.az / am, COLORS.accel, L * 0.75);
 
         // Sail plane, drawn as the line where the sail intersects this view.
-        const nu = s.nx * u[0] + s.ny * u[1] + s.nz * u[2];
-        const nw = s.nx * w[0] + s.ny * w[1] + s.nz * w[2];
+        const nu = view.nx * u[0] + view.ny * u[1] + view.nz * u[2];
+        const nw = view.nx * w[0] + view.ny * w[1] + view.nz * w[2];
         const nm = Math.hypot(nu, nw);
         if (nm > 1e-9) {
           // In-plane direction perpendicular to the projected normal.
@@ -341,17 +351,6 @@ export function View2D() {
       ctx.fillText(`horizontal: ${uLabel}`, 10 * dpr, H - 38 * dpr);
       ctx.fillText(`vertical: ${wLabel}`, 10 * dpr, H - 24 * dpr);
 
-      // Advance playback here too, so 2D mode animates identically to 3D.
-      if (st.runState === 'playing') {
-        acc += st.playbackSpeed;
-        if (acc >= 1) {
-          const stepN = Math.floor(acc);
-          acc -= stepN;
-          st.stepCursor(stepN);
-        }
-      } else {
-        acc = 0;
-      }
     };
 
     raf = requestAnimationFrame(draw);

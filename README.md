@@ -126,8 +126,44 @@ timeline is scrubbable, and the visualisation frame rate is completely
 decoupled from the integration timestep.
 
 - **Run** propagates (with a progress bar, cancellable, UI stays responsive).
-- **▶ / ⏸ / ⏹** drive the playback cursor; speed is selectable 0.25× to 64×.
+- **▶ / ⏸ / ⏹** drive the playback cursor.
 - The 3D view, the HUD and the chart cursor all follow that one cursor.
+
+### Playback rate
+
+The rate is set in **simulation time per real second** — `1:1`, `1 min/s`,
+`10 min/s`, `1 h/s`, `1 d/s`, or anywhere between via a log slider — rather
+than as an abstract multiplier. The timeline reports **how long one revolution
+takes to watch** at the current setting, and a `1 rev / 30 s` button sets the
+rate from the actual orbital period.
+
+This matters for studying attitude: to see the sail feather and re-point
+through different parts of an orbit you want a revolution to take tens of
+seconds, which is 100–300× real time in LEO and something quite different at
+GEO. A samples-per-frame multiplier cannot express that, because its meaning
+changes with the output interval and the display refresh rate.
+
+For parking on a specific point in the orbit:
+
+| Control | Action |
+| --- | --- |
+| `Space` | Play / pause |
+| `←` `→` | Step one recorded sample |
+| `Shift` + `←` `→` | Step ten samples |
+| `◄ ►` buttons | Same, next to the timeline |
+
+The HUD reports the **revolution number** and **orbit phase** (argument of
+latitude) so "which part of the orbit is this?" is readable rather than
+inferred from the picture.
+
+The views **interpolate between recorded samples**, so slow playback glides
+instead of stepping — the default LEO run has only ~38 samples per revolution.
+The interpolation spans at most one output interval (2.7% of a revolution), so
+a sharp attitude switch appears smoothed over that much; HUD numbers use the
+nearest recorded sample so every figure shown is a real computed value, and
+pausing or stepping lands exactly on a sample. The timeline warns when the
+sampling is too coarse to resolve more detail, in which case reduce the output
+interval and re-run.
 
 ### Scenarios
 

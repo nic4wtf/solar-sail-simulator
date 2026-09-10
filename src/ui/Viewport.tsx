@@ -22,7 +22,7 @@ const CAMERA_LABELS: Record<CameraTarget, string> = {
   free: 'Free',
 };
 
-const SPEEDS = [0.25, 1, 4, 16, 64];
+
 
 export function Viewport() {
   const viewMode = useStore((s) => s.viewMode);
@@ -163,6 +163,15 @@ function Hud() {
       <Row label="Semi-major axis" value={formatLength(sample.sma)} />
       <Row label="Eccentricity" value={fixed(sample.ecc, 5)} />
       <Row label="Inclination" value={`${fixed(sample.inc * RAD, 3)} deg`} />
+      {Number.isFinite(sample.period) && sample.period > 0 && (
+        <>
+          <Row label="Revolution" value={`${Math.floor(sample.t / sample.period) + 1}`} />
+          <Row
+            label="Orbit phase"
+            value={`${fixed(sample.argLat * RAD, 1)} deg`}
+          />
+        </>
+      )}
       {(result.config.forces.moonGravity || !isEarth) && (
         <Row label="Moon distance" value={formatLength(sample.moonDistance)} />
       )}
@@ -206,21 +215,69 @@ function Legend() {
   );
 }
 
+/**
+ * Format a playback rate given in simulation seconds per real second.
+ *
+ * Shown in the unit a user thinks in ("10 min/s") rather than as a bare
+ * multiplier, because the useful question is how much mission time passes per
+ * second of watching.
+ */
+function formatRate(rate: number): string {
+  if (rate < 1) return `${rate.toFixed(2)} s/s`;
+  if (rate < 60) return `${Math.round(rate)} s/s`;
+  if (rate < 3600) return `${(rate / 60).toFixed(rate / 60 < 10 ? 1 : 0)} min/s`;
+  if (rate < 86400) return `${(rate / 3600).toFixed(rate / 3600 < 10 ? 1 : 0)} h/s`;
+  return `${(rate / 86400).toFixed(rate / 86400 < 10 ? 1 : 0)} d/s`;
+}
+
+/** Preset rates, in simulation seconds per real second. */
+const RATE_PRESETS: Array<{ rate: number; label: string }> = [
+  { rate: 1, label: '1:1' },
+  { rate: 60, label: '1 min/s' },
+  { rate: 600, label: '10 min/s' },
+  { rate: 3600, label: '1 h/s' },
+  { rate: 86400, label: '1 d/s' },
+];
+
 function Timeline() {
   const result = useStore((s) => s.result);
   const cursor = useStore((s) => s.cursor);
   const setCursor = useStore((s) => s.setCursor);
-  const playbackSpeed = useStore((s) => s.playbackSpeed);
-  const setPlaybackSpeed = useStore((s) => s.setPlaybackSpeed);
+  const stepCursor = useStore((s) => s.stepCursor);
+  const playbackRate = useStore((s) => s.playbackRate);
+  const setPlaybackRate = useStore((s) => s.setPlaybackRate);
 
   const count = result?.samples.length ?? 0;
   const sample = result && count > 0 ? result.samples[Math.min(cursor, count - 1)] : null;
 
+  // How long one revolution takes to watch at the current rate. This is the
+  // number that actually answers "is this slow enough to see the attitude
+  // change through the orbit?".
+  const period = sample?.period;
+  const secondsPerRev =
+    period && Number.isFinite(period) && playbackRate > 0 ? period / playbackRate : null;
+
+  // Samples per revolution bounds how much attitude detail exists to be seen,
+  // no matter how slowly it is played.
+  const outputInterval = result?.config.integration.outputInterval;
+  const samplesPerRev =
+    period && Number.isFinite(period) && outputInterval ? period / outputInterval : null;
+
+  /** Set the rate so one revolution takes `seconds` of real time. */
+  const fitRevolution = (seconds: number) => {
+    if (period && Number.isFinite(period)) setPlaybackRate(period / seconds);
+    else if (result) setPlaybackRate(result.summary.finalTime / seconds);
+  };
+
+  // Log slider: 1 s/s to 1e6 s/s spans real time to ~11 days per second.
+  const LOG_MIN = 0;
+  const LOG_MAX = 6;
+  const logValue = Math.log10(Math.max(1, playbackRate));
+
   return (
     <div className="timeline">
-      <span className="timeline-time">
-        {sample ? formatDuration(sample.t) : '--'}
-      </span>
+      <span className="timeline-time">{sample ? formatDuration(sample.t) : '--'}</span>
+
       <input
         className="timeline-scrub"
         type="range"
@@ -231,22 +288,88 @@ function Timeline() {
         onChange={(e) => setCursor(Number(e.target.value))}
         aria-label="Playback position"
       />
+
       <span className="timeline-time">
         {result ? formatDuration(result.summary.finalTime) : '--'}
       </span>
+
+      {/* Frame stepping, for parking on a specific point in the orbit. */}
       <div className="seg">
-        <span className="seg-label">Speed</span>
-        {SPEEDS.map((s) => (
+        <button
+          onClick={() => stepCursor(-1)}
+          disabled={count === 0}
+          title="Previous sample (Left arrow)"
+          aria-label="Previous sample"
+        >
+          &#9666;
+        </button>
+        <button
+          onClick={() => stepCursor(1)}
+          disabled={count === 0}
+          title="Next sample (Right arrow)"
+          aria-label="Next sample"
+        >
+          &#9656;
+        </button>
+      </div>
+
+      <div className="rate-control">
+        <span className="seg-label">Rate</span>
+        <input
+          className="rate-slider"
+          type="range"
+          min={LOG_MIN}
+          max={LOG_MAX}
+          step={0.01}
+          value={Math.min(LOG_MAX, Math.max(LOG_MIN, logValue))}
+          onChange={(e) => setPlaybackRate(10 ** Number(e.target.value))}
+          aria-label="Playback rate"
+          title="Simulation time per real second"
+        />
+        <span className="rate-readout" title="Simulation time elapsed per real second">
+          {formatRate(playbackRate)}
+        </span>
+      </div>
+
+      <div className="seg">
+        {RATE_PRESETS.map((p) => (
           <button
-            key={s}
-            className={playbackSpeed === s ? 'active' : ''}
-            onClick={() => setPlaybackSpeed(s)}
-            title={`${s} samples per frame`}
+            key={p.rate}
+            className={Math.abs(playbackRate - p.rate) < 1e-6 ? 'active' : ''}
+            onClick={() => setPlaybackRate(p.rate)}
+            title={`${formatRate(p.rate)} of mission time per real second`}
           >
-            {s < 1 ? `${s}x` : `${s}x`}
+            {p.label}
           </button>
         ))}
+        <button
+          onClick={() => fitRevolution(30)}
+          disabled={!result}
+          title={
+            period && Number.isFinite(period)
+              ? 'Set the rate so one revolution takes 30 seconds to watch'
+              : 'This trajectory is not periodic, so the whole run is fitted to 30 seconds'
+          }
+        >
+          {period && Number.isFinite(period) ? '1 rev / 30 s' : 'Run / 30 s'}
+        </button>
       </div>
+
+      {secondsPerRev !== null && (
+        <span
+          className="timeline-note"
+          title={
+            samplesPerRev !== null
+              ? `${samplesPerRev.toFixed(0)} recorded samples per revolution. The views interpolate between them, so slowing down further than this cannot reveal more attitude detail - reduce the output interval in the Simulation panel and re-run instead.`
+              : undefined
+          }
+        >
+          1 rev &asymp; {secondsPerRev < 1 ? secondsPerRev.toFixed(2) : secondsPerRev.toFixed(1)} s
+          {samplesPerRev !== null && samplesPerRev < 25 && secondsPerRev > 8 && (
+            <span className="timeline-warn"> &middot; only {samplesPerRev.toFixed(0)} samples/rev</span>
+          )}
+        </span>
+      )}
     </div>
   );
 }

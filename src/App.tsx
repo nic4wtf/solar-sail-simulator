@@ -53,6 +53,38 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Playback keyboard shortcuts. Stepping one sample at a time is the only
+  // practical way to park on a specific point in the orbit and read the exact
+  // attitude there, so it gets arrow keys as well as buttons.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Never hijack typing in a field.
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) {
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const st = useStore.getState();
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (st.runState === 'playing') st.pause();
+        else st.play();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        st.pause();
+        st.stepCursor(e.shiftKey ? -10 : -1);
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        st.pause();
+        st.stepCursor(e.shiftKey ? 10 : 1);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Follow the OS colour-scheme while the user's choice is "system". The
   // store ignores the call for any other choice, so the listener can stay
   // attached unconditionally.

@@ -68,8 +68,28 @@ interface AppState {
   // --- Playback --------------------------------------------------------
   /** Index into `result.samples` currently displayed. */
   cursor: number;
-  /** Playback speed multiplier applied to sample advance. */
-  playbackSpeed: number;
+  /**
+   * Playback rate in SIMULATION SECONDS PER REAL SECOND.
+   *
+   * Deliberately not a "speed multiplier" over sample advance, which is what
+   * this used to be. That older scheme advanced N samples per animation
+   * frame, so the actual rate depended on the output interval AND the display
+   * refresh rate: its slowest setting still ran a LEO revolution past in 2.5
+   * real seconds, and the same "0.25x" meant a different speed in every
+   * scenario. Simulation-time-per-real-time is frame-rate independent,
+   * scenario independent, and directly answerable ("how long will one
+   * revolution take to watch?").
+   */
+  playbackRate: number;
+  /**
+   * Fractional position between `cursor` and `cursor + 1`, 0..1.
+   *
+   * Recorded samples are far apart compared with a display frame - the
+   * default LEO run has ~38 samples per revolution - so playing back on
+   * sample boundaries alone judders badly at the slow rates this control
+   * exists to provide. The views interpolate across this fraction.
+   */
+  cursorFrac: number;
   /** Whether the trajectory trail shows the whole run or only the past. */
   showFullTrajectory: boolean;
 
@@ -109,7 +129,12 @@ interface AppState {
   stop: () => void;
   setCursor: (index: number) => void;
   stepCursor: (delta: number) => void;
-  setPlaybackSpeed: (speed: number) => void;
+  setPlaybackRate: (rate: number) => void;
+  /**
+   * Advance playback by a real-time delta [s]. Called from the render loop,
+   * which owns the frame clock.
+   */
+  advancePlayback: (realDeltaSeconds: number) => void;
 
   setThemeChoice: (choice: ThemeChoice) => void;
   /** Re-resolve 'system' after an OS colour-scheme change. */
@@ -154,7 +179,11 @@ export const useStore = create<AppState>((set, get) => ({
   runError: null,
 
   cursor: 0,
-  playbackSpeed: 1,
+  // 600 s of mission time per real second = 10 simulated minutes per second.
+  // A 95-minute LEO revolution then takes ~9.5 s to watch, which is slow
+  // enough to follow the sail attitude through it.
+  playbackRate: 600,
+  cursorFrac: 0,
   showFullTrajectory: true,
 
   themeChoice: initialThemeChoice,
@@ -260,9 +289,11 @@ export const useStore = create<AppState>((set, get) => ({
     const { result, cursor } = get();
     if (!result || result.samples.length < 2) return;
     // Restarting from the end rewinds, which is what a Play press means there.
+    const atEnd = cursor >= result.samples.length - 1;
     set({
       runState: 'playing',
-      cursor: cursor >= result.samples.length - 1 ? 0 : cursor,
+      cursor: atEnd ? 0 : cursor,
+      ...(atEnd ? { cursorFrac: 0 } : {}),
     });
   },
 
@@ -271,14 +302,16 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   stop: () => {
-    if (get().result) set({ runState: 'ready', cursor: 0 });
+    if (get().result) set({ runState: 'ready', cursor: 0, cursorFrac: 0 });
   },
 
   setCursor: (index) => {
     const { result } = get();
     if (!result) return;
     const max = result.samples.length - 1;
-    set({ cursor: Math.max(0, Math.min(max, Math.round(index))) });
+    // Scrubbing lands exactly on a sample, so the readouts are exact values
+    // rather than interpolated ones.
+    set({ cursor: Math.max(0, Math.min(max, Math.round(index))), cursorFrac: 0 });
   },
 
   stepCursor: (delta) => {
@@ -287,13 +320,64 @@ export const useStore = create<AppState>((set, get) => ({
     const max = result.samples.length - 1;
     const next = cursor + delta;
     if (next >= max) {
-      set({ cursor: max, runState: runState === 'playing' ? 'ready' : runState });
+      set({
+        cursor: max,
+        cursorFrac: 0,
+        runState: runState === 'playing' ? 'ready' : runState,
+      });
     } else {
-      set({ cursor: Math.max(0, next) });
+      set({ cursor: Math.max(0, next), cursorFrac: 0 });
     }
   },
 
-  setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
+  setPlaybackRate: (rate) =>
+    // Clamped to the range the UI slider exposes; 1e7 is about 4 months of
+    // mission time per second, beyond which nothing is discernible.
+    set({ playbackRate: Math.max(0.1, Math.min(1e7, rate)) }),
+
+  advancePlayback: (realDelta) => {
+    const { result, runState, cursor, cursorFrac, playbackRate } = get();
+    if (runState !== 'playing' || !result) return;
+
+    const samples = result.samples;
+    const max = samples.length - 1;
+    if (max < 1) return;
+    if (cursor >= max) {
+      set({ cursor: max, cursorFrac: 0, runState: 'ready' });
+      return;
+    }
+
+    // Guard against a huge delta after a background tab resumes, which would
+    // otherwise jump the whole run in one frame.
+    const dt = Math.min(Math.max(realDelta, 0), 0.25);
+    let remainingSim = playbackRate * dt;
+    let i = cursor;
+    let frac = cursorFrac;
+
+    // Walk forward through sample intervals. Intervals are uniform in
+    // practice but the adaptive integrator can vary them, so each is measured
+    // rather than assumed.
+    while (i < max && remainingSim > 0) {
+      const span = samples[i + 1].t - samples[i].t;
+      if (span <= 0) {
+        i++;
+        frac = 0;
+        continue;
+      }
+      const leftInInterval = (1 - frac) * span;
+      if (remainingSim < leftInInterval) {
+        frac += remainingSim / span;
+        remainingSim = 0;
+      } else {
+        remainingSim -= leftInInterval;
+        i++;
+        frac = 0;
+      }
+    }
+
+    if (i >= max) set({ cursor: max, cursorFrac: 0, runState: 'ready' });
+    else set({ cursor: i, cursorFrac: frac });
+  },
 
   // -------------------------------------------------------------------
   setThemeChoice: (choice) => {
@@ -373,6 +457,43 @@ export const selectCurrentSample = (s: AppState) =>
     : null;
 
 export const selectSampleCount = (s: AppState) => s.result?.samples.length ?? 0;
+
+/**
+ * Interpolated display state at `cursor + cursorFrac`.
+ *
+ * Position and the sail vectors are interpolated so slow playback is smooth
+ * rather than a staircase. The interpolation is between two genuinely
+ * computed samples and spans at most one output interval (2.7% of a
+ * revolution in the default LEO), so a sharp attitude switch appears smoothed
+ * over that much. HUD NUMBERS deliberately use the nearest sample instead -
+ * see `selectCurrentSample` - so every figure shown is a real computed value.
+ */
+export function interpolatedState(
+  s: AppState,
+): { x: number; y: number; z: number; nx: number; ny: number; nz: number; ax: number; ay: number; az: number } | null {
+  const res = s.result;
+  if (!res || res.samples.length === 0) return null;
+  const max = res.samples.length - 1;
+  const i = Math.min(s.cursor, max);
+  const a = res.samples[i];
+  if (i >= max || s.cursorFrac <= 0) {
+    return { x: a.x, y: a.y, z: a.z, nx: a.nx, ny: a.ny, nz: a.nz, ax: a.ax, ay: a.ay, az: a.az };
+  }
+  const b = res.samples[i + 1];
+  const f = s.cursorFrac;
+  const l = (p: number, q: number) => p + (q - p) * f;
+  return {
+    x: l(a.x, b.x),
+    y: l(a.y, b.y),
+    z: l(a.z, b.z),
+    nx: l(a.nx, b.nx),
+    ny: l(a.ny, b.ny),
+    nz: l(a.nz, b.nz),
+    ax: l(a.ax, b.ax),
+    ay: l(a.ay, b.ay),
+    az: l(a.az, b.az),
+  };
+}
 
 /**
  * The active colour palette.
