@@ -75,9 +75,27 @@ export interface SpacecraftConfig {
   dryMass: number;
   /**
    * Propellant mass [kg]. Carried for completeness of the mass budget only:
-   * V1 has no thruster model, so this mass is inert and never expended.
+   * there is no thruster model, so this mass is inert and never expended.
    */
   propellantMass: number;
+  /**
+   * Constant cross-section of the spacecraft bus [m^2], used by the drag
+   * model only.
+   *
+   * The SAIL contributes its own, attitude-dependent drag area on top of
+   * this; see `forces/drag.ts`. The bus term is taken as orientation
+   * independent, which is the usual tumble-averaged assumption and is in any
+   * case swamped by the sail whenever the sail is not edge-on.
+   */
+  busArea: number;
+  /**
+   * Free-molecular drag coefficient [-], referred to the projected area.
+   *
+   * 2.2 is the conventional value for a satellite in the upper atmosphere
+   * and is the default. Values from about 2.0 to 2.4 are all defensible; the
+   * spread is smaller than the uncertainty in the density model it multiplies.
+   */
+  dragCoefficient: number;
 }
 
 /** Total spacecraft mass [kg]. */
@@ -213,6 +231,11 @@ export const DEFAULT_SAIL: SailConfig = {
 export const DEFAULT_SPACECRAFT: SpacecraftConfig = {
   dryMass: 100,
   propellantMass: 0,
+  // A 100 kg bus is roughly a 1 m cube, so ~1 m^2 of cross-section. Two
+  // orders of magnitude below the 100 m^2 sail, which is the point: for a
+  // sail the drag area is the sail, and it is under attitude control.
+  busArea: 1,
+  dragCoefficient: 2.2,
 };
 
 /** A perfectly reflecting sail - used by the validation tests. */

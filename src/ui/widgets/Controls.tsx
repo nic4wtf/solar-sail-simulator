@@ -313,6 +313,7 @@ export function CheckField({
   help,
   disabled,
   message,
+  messageKind = 'warning',
 }: {
   label: string;
   checked: boolean;
@@ -320,6 +321,7 @@ export function CheckField({
   help?: ReactNode;
   disabled?: boolean;
   message?: string;
+  messageKind?: 'warning' | 'error' | 'info';
 }) {
   const id = useId();
   return (
@@ -333,7 +335,7 @@ export function CheckField({
       />
       <label htmlFor={id}>{label}</label>
       {help && <Info>{help}</Info>}
-      {message && <div className="field-msg field-msg-warning">{message}</div>}
+      {message && <div className={`field-msg field-msg-${messageKind}`}>{message}</div>}
     </div>
   );
 }

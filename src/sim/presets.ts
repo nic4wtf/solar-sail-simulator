@@ -114,7 +114,7 @@ export const PRESETS: Preset[] = [
       const cfg = buildScenario('lunar-transfer', epoch);
       cfg.name = 'Lunar transfer';
       cfg.sail = { ...DEFAULT_SAIL, area: 400 };
-      cfg.spacecraft = { dryMass: 50, propellantMass: 0 };
+      cfg.spacecraft = { ...cfg.spacecraft, dryMass: 50, propellantMass: 0 };
       return cfg;
     },
   },
@@ -129,7 +129,7 @@ export const PRESETS: Preset[] = [
       cfg.name = 'Lunar flyby';
       cfg.scenarioId = 'lunar-transfer';
       cfg.sail = { ...DEFAULT_SAIL, area: 400 };
-      cfg.spacecraft = { dryMass: 50, propellantMass: 0 };
+      cfg.spacecraft = { ...cfg.spacecraft, dryMass: 50, propellantMass: 0 };
       cfg.attitude = { kind: 'optimalDirection', direction: 'prograde' };
       cfg.integration.duration = 20 * SEC_PER_DAY;
       cfg.integration.outputInterval = Math.round((20 * SEC_PER_DAY) / 4000);
@@ -147,6 +147,46 @@ export const PRESETS: Preset[] = [
       cfg.name = 'Eclipse cost comparison';
       cfg.attitude = { kind: 'optimalDirection', direction: 'prograde' };
       cfg.integration.duration = 14 * SEC_PER_DAY;
+      return cfg;
+    },
+  },
+  {
+    id: 'interplanetary-beta',
+    name: 'How big does an interplanetary sail have to be?',
+    question:
+      'What area-to-mass ratio does a sail actually need to reach Mars, and what does that imply about the material?',
+    guidance:
+      'Runs the Mars spiral at the "high-performance" 100 m^2/kg of the interplanetary literature - about fifteen times anything flown. Then open the Sensitivity panel, sweep the area-to-mass ratio from 10 to 200 and plot the furthest solar distance reached: the answer is steeply non-linear, because a sail that cannot climb out of the inner system never gets to the weaker gravity where climbing is easier. Read the lightness number in the Mission panel as you go - it is the number the physics actually depends on.',
+    build: (epoch = DEFAULT_EPOCH) => {
+      const cfg = buildScenario('helio-mars', epoch);
+      cfg.name = 'Interplanetary sail sizing';
+      return cfg;
+    },
+  },
+  {
+    id: 'solar-oberth',
+    name: 'Solar Oberth: fall in to go out',
+    question:
+      'Can a sail too small to escape the solar system escape anyway, by falling toward the Sun first?',
+    guidance:
+      'Yes, and by a wide margin. This sail has a lightness number of 0.14 - well under the 0.5 needed to escape from a circular 1 AU orbit by pointing straight out - yet it leaves the solar system after a 0.09 AU perihelion, because the radiation pressure there is 120 times its value at Earth. Watch the specific energy on the Altitude and energy chart: almost all of the gain happens in the few days around perihelion. Then note what the model does NOT contain: no sail material yet made survives that environment.',
+    build: (epoch = DEFAULT_EPOCH) => {
+      const cfg = buildScenario('helio-solar-pass', epoch);
+      cfg.name = 'Solar Oberth manoeuvre';
+      return cfg;
+    },
+  },
+  {
+    id: 'reached-orbit-not-planet',
+    name: 'Reaching an orbit is not reaching a planet',
+    question:
+      'If the sail gets to Venus\'s orbital radius, has it got to Venus?',
+    guidance:
+      'Run it and read the two figures in the Interplanetary outcome block separately: "reached Venus orbital radius" and "closest approach to Venus". They answer different questions, and nothing in this model phases the departure, so whether they agree is down to where Venus happens to be. The Mission panel quotes the synodic period - 1.6 years for Venus - which is how often that alignment comes round. Change the epoch by a few months and watch the closest approach move by an astronomical unit.',
+    build: (epoch = DEFAULT_EPOCH) => {
+      const cfg = buildScenario('helio-venus', epoch);
+      cfg.name = 'Venus: orbit versus planet';
+      cfg.integration.duration = 300 * SEC_PER_DAY;
       return cfg;
     },
   },

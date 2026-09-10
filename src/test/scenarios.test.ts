@@ -15,8 +15,27 @@ import { propagate } from '../sim/propagator.ts';
 import { feasibilityReport } from '../sim/analysis.ts';
 import { configFromJson, configToJson, trajectoryToCsv } from '../sim/exportData.ts';
 import { runSweep } from '../sim/sensitivity.ts';
+import type { SimulationConfig } from '../sim/types.ts';
 
 const runnable = SCENARIOS.filter((s) => !s.future && s.build);
+
+/**
+ * Strip every non-gravitational term except the sail.
+ *
+ * The Earth scenarios ship with drag and Earth-radiation ON, because that is
+ * the honest model of a large sail in LEO. But the tests below exist to check
+ * the SAIL's own behaviour - that prograde steering raises the orbit, that
+ * the response is linear in area - and with drag enabled a 100 m^2 sail on
+ * 100 kg has a ballistic coefficient near 1 kg/m^2, so the atmosphere swamps
+ * the signal being measured and even reverses its sign. That is a real
+ * result, asserted separately in the drag suite below; here it is noise.
+ */
+function sailOnly<T extends SimulationConfig>(cfg: T): T {
+  cfg.forces.atmosphericDrag = false;
+  cfg.forces.earthAlbedo = false;
+  cfg.forces.earthInfrared = false;
+  return cfg;
+}
 
 describe('every scenario builds and propagates', () => {
   it.each(runnable.map((s) => [s.id] as const))('%s', async (id) => {
@@ -71,7 +90,7 @@ describe('LEO orbit raising behaves as expected', () => {
     const results: Record<string, number> = {};
 
     for (const direction of ['prograde', 'retrograde'] as const) {
-      const cfg = buildScenario('leo-circular');
+      const cfg = sailOnly(buildScenario('leo-circular'));
       cfg.attitude = { kind: 'optimalDirection', direction };
       const res = await propagate(cfg, { yieldToEventLoop: false });
       const report = feasibilityReport(res, cfg.sail, cfg.spacecraft);
@@ -91,7 +110,7 @@ describe('LEO orbit raising behaves as expected', () => {
   it('a larger sail produces a proportionally larger orbit change', async () => {
     const deltas: number[] = [];
     for (const area of [100, 200, 400]) {
-      const cfg = buildScenario('leo-circular');
+      const cfg = sailOnly(buildScenario('leo-circular'));
       cfg.attitude = { kind: 'optimalDirection', direction: 'prograde' };
       cfg.sail = { ...cfg.sail, area };
       const res = await propagate(cfg, { yieldToEventLoop: false });
@@ -104,7 +123,7 @@ describe('LEO orbit raising behaves as expected', () => {
   }, 300000);
 
   it('no sail force means no secular orbit change', async () => {
-    const cfg = buildScenario('leo-circular');
+    const cfg = sailOnly(buildScenario('leo-circular'));
     cfg.forces.solarRadiationPressure = false;
     const res = await propagate(cfg, { yieldToEventLoop: false });
     const report = feasibilityReport(res, cfg.sail, cfg.spacecraft);
@@ -186,7 +205,7 @@ describe('lunar transfer aiming', () => {
     // The question the lunar scenario exists to answer.
     const withSail = buildScenario('lunar-transfer');
     withSail.sail = { ...withSail.sail, area: 400 };
-    withSail.spacecraft = { dryMass: 50, propellantMass: 0 };
+    withSail.spacecraft = { ...withSail.spacecraft, dryMass: 50, propellantMass: 0 };
 
     const withoutSail = structuredClone(withSail);
     withoutSail.forces.solarRadiationPressure = false;
@@ -277,7 +296,7 @@ describe('export and configuration round-trip', () => {
 
 describe('sensitivity sweep', () => {
   it('finds the expected monotonic scaling with area-to-mass ratio', async () => {
-    const cfg = buildScenario('leo-circular');
+    const cfg = sailOnly(buildScenario('leo-circular'));
     cfg.attitude = { kind: 'optimalDirection', direction: 'prograde' };
     cfg.integration.duration = 2 * SEC_PER_DAY;
 

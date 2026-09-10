@@ -39,6 +39,7 @@ export function DocsPanel() {
   const config = useStore((s) => s.config);
   const { forces, integration: integ, sail, attitude } = config;
   const isEarth = config.centralBody === 'earth';
+  const isHeliocentric = config.centralBody === 'sun';
 
   return (
     <div className="panel-body">
@@ -51,15 +52,29 @@ export function DocsPanel() {
             {isEarth ? 'Earth' : 'Moon'} point-mass gravity
           </OnOff>
           <OnOff on={forces.earthJ2 && isEarth}>Earth J2 oblateness</OnOff>
+          <OnOff on={forces.earthJ3 && isEarth}>Earth J3 pear-shape term</OnOff>
           <OnOff on={forces.moonGravity}>
             {isEarth ? 'Moon' : 'Earth'} third-body gravity
           </OnOff>
-          <OnOff on={forces.sunGravity}>Sun third-body gravity</OnOff>
+          <OnOff on={forces.sunGravity && !isHeliocentric}>Sun third-body gravity</OnOff>
+          <OnOff on={forces.planetGravity && config.perturbingPlanets.length > 0}>
+            Planetary third-body gravity
+            {config.perturbingPlanets.length > 0
+              ? ` (${config.perturbingPlanets.join(', ')})`
+              : ''}
+          </OnOff>
           <OnOff on={forces.solarRadiationPressure}>Solar radiation pressure</OnOff>
           <OnOff on={forces.eclipse}>Eclipse (umbra and penumbra)</OnOff>
-          <OnOff on={false}>Atmospheric drag</OnOff>
-          <OnOff on={false}>Earth albedo and infrared pressure</OnOff>
-          <OnOff on={false}>Gravity harmonics beyond J2</OnOff>
+          <OnOff on={forces.atmosphericDrag && isEarth}>
+            Atmospheric drag (sail-coupled)
+          </OnOff>
+          <OnOff on={forces.earthAlbedo}>Earth albedo radiation pressure</OnOff>
+          <OnOff on={forces.earthInfrared}>Earth infrared radiation pressure</OnOff>
+          <OnOff on={false}>Gravity harmonics beyond J3</OnOff>
+          <OnOff on={false}>Thermospheric winds and geomagnetic storms</OnOff>
+          <OnOff on={false}>Sphere-of-influence patching</OnOff>
+          <OnOff on={false}>Departure, arrival and launch-window targeting</OnOff>
+          <OnOff on={false}>Solar thermal limits and coronal drag</OnOff>
           <OnOff on={false}>Lunar gravity harmonics</OnOff>
           <OnOff on={false}>Attitude dynamics and control limits</OnOff>
           <OnOff on={false}>Sail billow, wrinkling and degradation</OnOff>
@@ -139,7 +154,8 @@ export function DocsPanel() {
         <Equation>{`Second-order system, integrated directly:
 
   dr/dt = v
-  dv/dt = a_central + a_J2 + a_moon + a_sun + a_srp
+  dv/dt = a_central + a_J2 + a_J3 + a_moon + a_sun
+          + a_planets + a_srp + a_drag + a_earthrad
 
 Central body (point mass):
 
@@ -159,8 +175,138 @@ Earth J2 oblateness (Vallado eq. 8-38):
   k   = -(3/2) J2 (mu/r^2) (Re/r)^2
   a_x = k (1 - 5 z^2/r^2) x/r
   a_y = k (1 - 5 z^2/r^2) y/r
-  a_z = k (3 - 5 z^2/r^2) z/r`}</Equation>
+  a_z = k (3 - 5 z^2/r^2) z/r
+
+Earth J3 pear-shape term (Vallado eq. 8-39):
+
+  k   = -(5/2) J3 (mu/r^2) (Re/r)^3
+  a_x = k [3 (z/r) - 7 (z/r)^3] x/r
+  a_y = k [3 (z/r) - 7 (z/r)^3] y/r
+  a_z = k [6 (z/r)^2 - 7 (z/r)^4 - 3/5]
+
+Both are the gradient of  U_n = -(mu/r) J_n (Re/r)^n P_n(z/r),
+which is what the validation suite checks them against.`}</Equation>
       </Section>
+
+      <Section title="Atmospheric drag">
+        <Equation>{`Velocity relative to a rigidly co-rotating atmosphere:
+
+  v_rel = v - omega_E x r ,  omega_E = 7.2921159e-5 rad/s
+
+Drag area, projected on the relative wind:
+
+  A_d = A_bus + A_sail |v_hat_rel . n|
+
+Acceleration:
+
+  a_drag = -(1/2) rho C_D (A_d / m) |v_rel| v_rel
+
+Density: piecewise-exponential fit to the US Standard
+Atmosphere 1976 / CIRA-72 (Vallado Table 8-4),
+
+  rho(h) = rho_0 exp(-(h - h_0)/H)
+
+evaluated in whichever of 28 bands contains h, and
+identically zero above 2000 km.`}</Equation>
+        <div className="doc-prose">
+          <p>
+            <strong>Why drag is different for a sail.</strong> For a conventional
+            satellite drag is a nuisance parameter: a fixed ballistic coefficient times a
+            density. For a sail it is <em>coupled to the control variable</em>, because
+            the sail is the drag area. The same projection that decides how much sunlight
+            the sail catches decides how much atmosphere it catches - except the two
+            projections are taken against different directions, the Sun line and the
+            relative wind. A sail edge-on to the wind has almost no drag; the same sail
+            broadside has the full area, two orders of magnitude more. That coupling is
+            what makes deorbit sails work, and it is why a steering law optimised purely
+            against the Sun line can behave very differently once drag is switched on.
+          </p>
+          <p>
+            <strong>What is not modelled.</strong> The density model is static: no diurnal
+            bulge, no thermospheric winds, no geomagnetic response. Real density above
+            200 km spans about an order of magnitude over the solar cycle, which the
+            activity selector represents only as a blunt multiplier. A flat plate in
+            free-molecular flow also develops lift perpendicular to the wind; that is
+            omitted, as is any variation of C_D with incidence angle.
+          </p>
+        </div>
+      </Section>
+
+      <Section title="Earth radiation pressure">
+        <Equation>{`Both terms arrive along the ZENITH direction and drive
+the same flat-plate law as sunlight, with a different
+pressure.
+
+Thermal infrared - exact for a uniform Lambertian sphere:
+
+  E_ir = M_ir (Re/r)^2 ,   M_ir = 240 W/m^2
+
+Reflected sunlight - interpolated between the two limits
+that have closed forms, weighted by w = (Re/r)^2:
+
+  near:  a S (Re/r)^2 max(0, cos phi)
+  far:   a S (Re/r)^2 (2/3pi) [sin phi + (pi - phi) cos phi]
+
+  phi = phase angle Sun-Earth-spacecraft
+  a   = 0.30  (Earth Bond albedo)`}</Equation>
+        <div className="doc-prose">
+          <p>
+            At 500 km these return of order 40% of the direct solar flux - far from
+            negligible on a vehicle propelled entirely by photon momentum. They translate
+            into much less than 40% more useful thrust, because both arrive along the
+            local vertical where they do very little work on the orbit.
+          </p>
+          <p>
+            <strong>The infrared term does not stop in eclipse.</strong> That makes it
+            qualitatively different from everything else in the model: it is the only
+            force still pushing on the sail in shadow. The albedo term switches itself off
+            geometrically instead - a spacecraft in the Earth's shadow is over the night
+            side, where the phase factor is zero.
+          </p>
+        </div>
+      </Section>
+
+      {isHeliocentric && (
+        <Section title="Heliocentric frame">
+          <Equation>{`Governing parameter out here is the LIGHTNESS NUMBER:
+
+  beta = a_c / (mu_sun / AU^2)
+
+Both the sail acceleration and solar gravity fall off
+as 1/r^2, so beta is the SAME EVERYWHERE. A sail that
+cannot escape from 1 AU cannot escape from 5 AU either.
+
+A Sun-facing sail reduces the effective gravitational
+parameter to mu (1 - beta), so a circular orbit escapes
+when
+
+  v^2 >= 2 mu (1 - beta) / r    ->    beta >= 0.5`}</Equation>
+          <div className="doc-prose">
+            <p>
+              <strong>Adding this frame changed almost nothing.</strong> The Sun-relative
+              vector <code>r - r_sun</code> becomes simply <code>r</code>; the pressure law
+              was always <code>P0 (1 AU / r)&sup2;</code> with no assumption that{' '}
+              <code>r</code> is near 1 AU; and cone and clock angles were always measured
+              from the Sun line. The steering laws, the force model and the integrator are
+              the same code that runs in low Earth orbit.
+            </p>
+            <p>
+              <strong>What is not modelled.</strong> There is no departure hyperbola, no
+              launch-window search, no arrival manoeuvre and no sphere-of-influence
+              patching: the integration centre never changes mid-run. A trajectory that
+              enters a planet&apos;s sphere of influence is reported as having arrived in
+              the neighbourhood, not as a capture solution. Solar thermal limits, coronal
+              drag and sail degradation - the three things that actually decide whether a
+              close solar pass is possible - are all absent.
+            </p>
+            <p>
+              Planetary positions come from Standish&apos;s approximate Keplerian elements,
+              precessed into the equinox of date so they agree with the solar and lunar
+              series. See <code>docs/interplanetary-model.md</code>.
+            </p>
+          </div>
+        </Section>
+      )}
 
       <Section title="Solar radiation pressure">
         <Equation>{`Pressure at heliocentric distance r:
@@ -447,7 +593,8 @@ Solved by bisection on
             <li><code>docs/orbital-mechanics.md</code> - elements, frames, conversions</li>
             <li><code>docs/solar-sail-model.md</code> - full SRP derivation</li>
             <li><code>docs/attitude-rules.md</code> - every steering law in detail</li>
-            <li><code>docs/earth-model.md</code> - Earth gravity, J2, eclipse</li>
+            <li><code>docs/earth-model.md</code> - Earth gravity, J2/J3, drag, albedo, eclipse</li>
+            <li><code>docs/interplanetary-model.md</code> - heliocentric frame, planetary ephemerides, lightness number</li>
             <li><code>docs/lunar-model.md</code> - lunar ephemeris and assumptions</li>
             <li><code>docs/validation.md</code> - test results and error budgets</li>
             <li><code>docs/future-work.md</code> - roadmap, including interplanetary</li>

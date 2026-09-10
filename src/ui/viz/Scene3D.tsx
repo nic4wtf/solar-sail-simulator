@@ -7,22 +7,65 @@
  * through React each frame would be pure overhead. React owns WHEN the scene
  * is rebuilt (new run, new camera target); the render loop owns the frames.
  *
- * SCALE: the scene works in units of 1000 km (Mm) so that a LEO orbit and the
- * lunar distance can share one depth buffer without z-fighting. Earth radius
- * is 6.378 units, the Moon orbit is 384 units.
+ * SCALE: the scene works in units of 1000 km (Mm) about a planet, so that a
+ * LEO orbit and the lunar distance can share one depth buffer without
+ * z-fighting - Earth radius is 6.378 units, the Moon orbit is 384 units.
+ *
+ * Heliocentrically that breaks down: 1 AU would be 149,600 units and Neptune
+ * 4.5 million, which no single depth buffer survives alongside a 6-unit
+ * Earth. So the scale is switched with the integration centre, to units of
+ * 1e6 km (Gm) about the Sun: 1 AU becomes 149.6 units and the solar radius
+ * 0.696, which is the same dynamic range the Earth-Moon view already handles.
+ *
+ * The bodies are still BUILT at the planetary scale and rescaled by a group
+ * transform, so there is one set of geometry rather than two.
  */
 
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { R_EARTH, R_MOON } from '../../core/constants.ts';
+import { AU, R_EARTH, R_MOON, R_SUN } from '../../core/constants.ts';
 import { interpolatedState, selectPalette, useStore } from '../../state/store.ts';
 import { type ThemePalette, PALETTES } from '../theme.ts';
 import { moonPosition } from '../../core/environment/moon.ts';
 import { sunDirection } from '../../core/environment/sun.ts';
+import {
+  type CentralBody,
+  CENTRAL_RADIUS,
+} from '../../core/environment/environment.ts';
+import {
+  type PlanetId,
+  PLANET_FACTS,
+  earthHeliocentric,
+  planetPeriod,
+  planetState,
+} from '../../core/environment/planets.ts';
 
-/** Scene units per metre: 1 unit = 1000 km. */
+/**
+ * Reference scene scale: 1 unit = 1000 km.
+ *
+ * All geometry is built at this scale. The active scale below is applied as a
+ * group transform on top of it.
+ */
 const S = 1e-6;
+
+/** Scene units per metre, by integration centre. */
+const SCALE_BY_CENTRE: Record<CentralBody, number> = {
+  earth: 1e-6,
+  moon: 1e-6,
+  // 1 unit = 1e6 km. 1 AU = 149.6 units, solar radius 0.696.
+  sun: 1e-9,
+};
+
+/**
+ * Planets drawn in the heliocentric view.
+ *
+ * The inner system plus Jupiter: far enough to give the outer scenarios
+ * something to be measured against, near enough that the view is not
+ * dominated by empty space. Saturn outward would put 1 AU inside 3% of the
+ * frame.
+ */
+const SHOWN_PLANETS: PlanetId[] = ['mercury', 'venus', 'mars', 'jupiter'];
 
 /**
  * Materials and objects whose colour depends on the theme.
@@ -32,6 +75,15 @@ const S = 1e-6;
  * discard the user's camera position and zoom on every toggle, which is a
  * poor trade for something as incidental as a colour change.
  */
+/** One drawn planet: body, orbit ring and screen-space marker. */
+interface PlanetVisual {
+  id: PlanetId;
+  group: THREE.Group;
+  orbit: THREE.Line;
+  marker: THREE.Sprite;
+  surface: THREE.MeshPhongMaterial;
+}
+
 interface ThemeTargets {
   earthSurface: THREE.MeshPhongMaterial;
   graticule: THREE.LineBasicMaterial;
@@ -39,6 +91,10 @@ interface ThemeTargets {
   atmosphere: THREE.MeshBasicMaterial;
   moonSurface: THREE.MeshPhongMaterial;
   moonOrbit: THREE.LineBasicMaterial;
+  sunSurface: THREE.MeshBasicMaterial;
+  sunGlow: THREE.MeshBasicMaterial;
+  planetSurfaces: THREE.MeshPhongMaterial[];
+  planetOrbits: THREE.LineBasicMaterial[];
   stars: THREE.PointsMaterial;
   trail: THREE.LineBasicMaterial;
   future: THREE.LineBasicMaterial;
@@ -65,6 +121,9 @@ interface SceneRefs {
   moonOrbit: THREE.Line;
   earthMarker: THREE.Sprite;
   moonMarker: THREE.Sprite;
+  sun: THREE.Group;
+  earthOrbit: THREE.Line;
+  planets: PlanetVisual[];
 
   trailGeom: THREE.BufferGeometry;
   trail: THREE.Line;
@@ -177,6 +236,79 @@ function buildMoon(p: ThemePalette): {
 }
 
 /**
+ * The Sun: an unlit disc plus a corona shell.
+ *
+ * `MeshBasicMaterial` rather than Phong because the Sun is the light source -
+ * shading it would draw a terminator on the one object in the scene that
+ * cannot have one.
+ */
+function buildSun(p: ThemePalette): {
+  group: THREE.Group;
+  surface: THREE.MeshBasicMaterial;
+  glow: THREE.MeshBasicMaterial;
+} {
+  const g = new THREE.Group();
+  const r = R_SUN * S;
+  const surface = new THREE.MeshBasicMaterial({ color: p.sunSurface });
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(r, 48, 32), surface));
+
+  const glow = new THREE.MeshBasicMaterial({
+    color: p.sunGlow,
+    transparent: true,
+    opacity: p.sunGlowOpacity,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(r * 2.2, 32, 24), glow));
+  return { group: g, surface, glow };
+}
+
+/** One perturbing planet: sphere, orbit ring and marker. */
+function buildPlanet(id: PlanetId, p: ThemePalette): PlanetVisual {
+  const facts = PLANET_FACTS[id];
+  const g = new THREE.Group();
+  const surface = new THREE.MeshPhongMaterial({ color: p.planetSurface, shininess: 4 });
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(facts.radius * S, 24, 16), surface));
+
+  const orbitMat = new THREE.LineBasicMaterial({
+    color: p.planetOrbitLine,
+    transparent: true,
+    opacity: 0.55,
+  });
+  const orbit = new THREE.Line(new THREE.BufferGeometry(), orbitMat);
+  orbit.frustumCulled = false;
+
+  return { id, group: g, orbit, marker: makeBodyMarker(facts.name, p.planetMarker), surface };
+}
+
+/**
+ * Sample one planet's orbit into a closed ring, from the ephemeris itself
+ * rather than from an idealised ellipse - so the drawn ring is the orbit the
+ * force model is actually using, inclination and all.
+ */
+function planetOrbitPoints(id: PlanetId, jd0: number, scale: number): THREE.Vector3[] {
+  const periodDays = planetPeriod(id) / 86400;
+  const pts: THREE.Vector3[] = [];
+  const N = 160;
+  for (let i = 0; i <= N; i++) {
+    const q = planetState(id, jd0 + (i / N) * periodDays).position;
+    pts.push(new THREE.Vector3(q[0] * scale, q[1] * scale, q[2] * scale));
+  }
+  return pts;
+}
+
+/** The Earth's heliocentric orbit, from the solar series the model uses. */
+function earthOrbitPoints(jd0: number, scale: number): THREE.Vector3[] {
+  const pts: THREE.Vector3[] = [];
+  const N = 160;
+  for (let i = 0; i <= N; i++) {
+    const q = earthHeliocentric(jd0 + (i / N) * 365.256).position;
+    pts.push(new THREE.Vector3(q[0] * scale, q[1] * scale, q[2] * scale));
+  }
+  return pts;
+}
+
+/**
  * Screen-space marker for a body that is too small to see.
  *
  * At lunar scale the Earth subtends about 1.6% of the frame height and the
@@ -262,20 +394,22 @@ export function Scene3D() {
   const showFullTrajectory = useStore((s) => s.showFullTrajectory);
 
   const samples = result?.samples;
-  const centre = result?.config.centralBody ?? 'earth';
+  const centre: CentralBody = result?.config.centralBody ?? 'earth';
+  const activeScale = SCALE_BY_CENTRE[centre];
 
   // The trajectory as a flat Float32Array in scene units, rebuilt only when a
   // new run arrives.
   const positions = useMemo(() => {
     if (!samples || samples.length === 0) return new Float32Array(0);
+    const sc = SCALE_BY_CENTRE[centre];
     const arr = new Float32Array(samples.length * 3);
     for (let i = 0; i < samples.length; i++) {
-      arr[i * 3] = samples[i].x * S;
-      arr[i * 3 + 1] = samples[i].y * S;
-      arr[i * 3 + 2] = samples[i].z * S;
+      arr[i * 3] = samples[i].x * sc;
+      arr[i * 3 + 1] = samples[i].y * sc;
+      arr[i * 3 + 2] = samples[i].z * sc;
     }
     return arr;
-  }, [samples]);
+  }, [samples, centre]);
 
   // --- One-time scene construction -----------------------------------
   useEffect(() => {
@@ -360,6 +494,45 @@ export function Scene3D() {
     const moon = moonBuilt.group;
     scene.add(moon);
 
+    const sunBuilt = buildSun(p0);
+    const sun = sunBuilt.group;
+    sun.visible = false;
+    scene.add(sun);
+
+    // A point light at the origin lights the planets correctly in the
+    // heliocentric view, where the light source is literally at the centre of
+    // the scene. The directional light used about a planet cannot do that -
+    // it has no position, only a direction, so every planet would be lit from
+    // the same side regardless of where it is in its orbit.
+    const sunPointLight = new THREE.PointLight(p0.sunLight, 3, 0, 0);
+    sunPointLight.visible = false;
+    scene.add(sunPointLight);
+
+    const planetVisuals = SHOWN_PLANETS.map((id) => {
+      const pv = buildPlanet(id, p0);
+      pv.group.visible = false;
+      pv.orbit.visible = false;
+      pv.marker.visible = false;
+      scene.add(pv.group);
+      scene.add(pv.orbit);
+      scene.add(pv.marker);
+      return pv;
+    });
+
+    const earthOrbitMat = new THREE.LineBasicMaterial({
+      color: p0.planetOrbitLine,
+      transparent: true,
+      opacity: 0.7,
+    });
+    const earthOrbit = new THREE.Line(new THREE.BufferGeometry(), earthOrbitMat);
+    earthOrbit.frustumCulled = false;
+    earthOrbit.visible = false;
+    scene.add(earthOrbit);
+
+    let sunMarker = makeBodyMarker('Sun', p0.sunMarker);
+    sunMarker.visible = false;
+    scene.add(sunMarker);
+
     // Marker sprites bake their colour into a canvas texture, so a theme
     // change replaces them rather than recolouring them.
     let earthMarker = makeBodyMarker('Earth', p0.earthMarker);
@@ -432,6 +605,13 @@ export function Scene3D() {
       atmosphere: earthBuilt.atmosphere,
       moonSurface: moonBuilt.surface,
       moonOrbit: moonOrbitMat,
+      sunSurface: sunBuilt.surface,
+      sunGlow: sunBuilt.glow,
+      planetSurfaces: planetVisuals.map((v) => v.surface),
+      planetOrbits: [
+        ...planetVisuals.map((v) => v.orbit.material as THREE.LineBasicMaterial),
+        earthOrbitMat,
+      ],
       stars: starMat,
       trail: trailMat,
       future: futureMat,
@@ -453,6 +633,12 @@ export function Scene3D() {
         p.name === 'dark' ? THREE.AdditiveBlending : THREE.NormalBlending;
       themeTargets.moonSurface.color.setHex(p.moonSurface);
       themeTargets.moonOrbit.color.setHex(p.moonOrbitLine);
+      themeTargets.sunSurface.color.setHex(p.sunSurface);
+      themeTargets.sunGlow.color.setHex(p.sunGlow);
+      themeTargets.sunGlow.opacity = p.sunGlowOpacity;
+      for (const m of themeTargets.planetSurfaces) m.color.setHex(p.planetSurface);
+      for (const m of themeTargets.planetOrbits) m.color.setHex(p.planetOrbitLine);
+      sunPointLight.color.setHex(p.sunLight);
       themeTargets.stars.color.setHex(p.starColor);
       themeTargets.stars.opacity = p.starOpacity;
       starPoints.visible = p.starOpacity > 0;
@@ -490,6 +676,16 @@ export function Scene3D() {
       swap(moonMarker, nextMoon);
       earthMarker = nextEarth;
       moonMarker = nextMoon;
+
+      const nextSun = makeBodyMarker('Sun', p.sunMarker);
+      swap(sunMarker, nextSun);
+      sunMarker = nextSun;
+
+      for (const pv of planetVisuals) {
+        const next = makeBodyMarker(PLANET_FACTS[pv.id].name, p.planetMarker);
+        swap(pv.marker, next);
+        pv.marker = next;
+      }
     };
 
     const onResize = () => {
@@ -559,19 +755,57 @@ export function Scene3D() {
         // Interpolated position and vectors, so slow playback glides rather
         // than stepping between samples.
         const view = interpolatedState(st) ?? s;
-        const isMoonCentred = res.config.centralBody === 'moon';
-        env0BodyRadius = (isMoonCentred ? R_MOON : R_EARTH) * S;
+        const frameCentre: CentralBody = res.config.centralBody;
+        const isMoonCentred = frameCentre === 'moon';
+        const isSunCentred = frameCentre === 'sun';
+        const SC = SCALE_BY_CENTRE[frameCentre];
+        // Geometry is built at the reference scale S, so a group transform of
+        // SC / S puts every body at the right size for the active frame.
+        const bodyScale = SC / S;
+        env0BodyRadius = CENTRAL_RADIUS[frameCentre] * SC;
 
         // --- Body positions -------------------------------------------
         const moonRel = moonPosition(s.jd, res.config.moonModel);
         const sunDir = sunDirection(s.jd);
 
-        if (isMoonCentred) {
+        earth.scale.setScalar(bodyScale);
+        moon.scale.setScalar(bodyScale);
+        sun.scale.setScalar(bodyScale);
+
+        if (isSunCentred) {
+          const earthHelio = earthHeliocentric(s.jd).position;
+          sun.position.set(0, 0, 0);
+          earth.position.set(earthHelio[0] * SC, earthHelio[1] * SC, earthHelio[2] * SC);
+          // At this scale the Moon is a third of a pixel from the Earth.
+          moon.position.copy(earth.position);
+        } else if (isMoonCentred) {
           moon.position.set(0, 0, 0);
-          earth.position.set(-moonRel[0] * S, -moonRel[1] * S, -moonRel[2] * S);
+          earth.position.set(-moonRel[0] * SC, -moonRel[1] * SC, -moonRel[2] * SC);
         } else {
           earth.position.set(0, 0, 0);
-          moon.position.set(moonRel[0] * S, moonRel[1] * S, moonRel[2] * S);
+          moon.position.set(moonRel[0] * SC, moonRel[1] * SC, moonRel[2] * SC);
+        }
+
+        sun.visible = isSunCentred;
+        sunPointLight.visible = isSunCentred;
+        // The directional light would double-light the planets and put a
+        // terminator on the Sun's own glow shell, so the two are exclusive.
+        sunLight.visible = !isSunCentred;
+
+        if (isSunCentred) {
+          for (const pv of planetVisuals) {
+            const q = planetState(pv.id, s.jd).position;
+            pv.group.position.set(q[0] * SC, q[1] * SC, q[2] * SC);
+            pv.group.scale.setScalar(bodyScale);
+            pv.group.visible = true;
+            pv.orbit.visible = true;
+          }
+        } else {
+          for (const pv of planetVisuals) {
+            pv.group.visible = false;
+            pv.orbit.visible = false;
+            pv.marker.visible = false;
+          }
         }
 
         // Sunlight from the true Sun direction (as seen from the Earth).
@@ -606,13 +840,19 @@ export function Scene3D() {
           marker.scale.setScalar(markerWorld);
         };
 
-        placeMarker(earthMarker, earth.position, R_EARTH * S, true);
-        placeMarker(moonMarker, moon.position, R_MOON * S, moon.visible);
+        placeMarker(earthMarker, earth.position, R_EARTH * SC, true);
+        placeMarker(moonMarker, moon.position, R_MOON * SC, moon.visible && !isSunCentred);
+        placeMarker(sunMarker, sun.position, R_SUN * SC, isSunCentred);
+        if (isSunCentred) {
+          for (const pv of planetVisuals) {
+            placeMarker(pv.marker, pv.group.position, PLANET_FACTS[pv.id].radius * SC, true);
+          }
+        }
 
         // --- Spacecraft ------------------------------------------------
-        const px = view.x * S;
-        const py = view.y * S;
-        const pz = view.z * S;
+        const px = view.x * SC;
+        const py = view.y * SC;
+        const pz = view.z * SC;
         craftGroup.position.set(px, py, pz);
 
         // Sizes are driven by the camera distance so the marker, the sail and
@@ -770,7 +1010,9 @@ export function Scene3D() {
               ? moon.position
               : st.cameraTarget === 'earth'
                 ? earth.position
-                : null;
+                : st.cameraTarget === 'sun'
+                  ? sun.position
+                  : null;
           if (followTarget) {
             tmp.delta.subVectors(followTarget, controls.target);
             // Guard against the first frame after a target switch, where the
@@ -807,6 +1049,9 @@ export function Scene3D() {
       moonOrbit,
       earthMarker,
       moonMarker,
+      sun,
+      earthOrbit,
+      planets: planetVisuals,
       trailGeom,
       trail,
       futureGeom,
@@ -860,6 +1105,7 @@ export function Scene3D() {
     // Only drawn for Earth-centred runs: in a Moon-centred frame the Moon sits
     // at the origin and its own orbit is not a meaningful thing to draw.
     if (samples && samples.length > 0) {
+      const jd0 = samples[0].jd;
       const model = result?.config.moonModel ?? 'series';
       const usesMoon =
         centre === 'earth' &&
@@ -867,11 +1113,10 @@ export function Scene3D() {
           (samples[samples.length - 1]?.radius ?? 0) > 1e8);
 
       if (usesMoon) {
-        const jd0 = samples[0].jd;
         const pts: THREE.Vector3[] = [];
         for (let i = 0; i <= 180; i++) {
           const p = moonPosition(jd0 + (i / 180) * 27.321661, model);
-          pts.push(new THREE.Vector3(p[0] * S, p[1] * S, p[2] * S));
+          pts.push(new THREE.Vector3(p[0] * activeScale, p[1] * activeScale, p[2] * activeScale));
         }
         r.moonOrbit.geometry.dispose();
         r.moonOrbit.geometry = new THREE.BufferGeometry().setFromPoints(pts);
@@ -879,6 +1124,24 @@ export function Scene3D() {
       r.moonOrbit.visible = usesMoon;
       // The Moon body itself is still worth showing in a Moon-centred run.
       r.moon.visible = usesMoon || centre === 'moon';
+
+      // Heliocentric reference rings. Rebuilt per run rather than per frame:
+      // each is 160 Kepler solves, and the orbits do not move perceptibly
+      // over any run this tool propagates.
+      if (centre === 'sun') {
+        const setRing = (line: THREE.Line, pts: THREE.Vector3[]) => {
+          line.geometry.dispose();
+          line.geometry = new THREE.BufferGeometry().setFromPoints(pts);
+          line.visible = true;
+        };
+        setRing(r.earthOrbit, earthOrbitPoints(jd0, activeScale));
+        for (const pv of r.planets) {
+          setRing(pv.orbit, planetOrbitPoints(pv.id, jd0, activeScale));
+        }
+      } else {
+        r.earthOrbit.visible = false;
+        for (const pv of r.planets) pv.orbit.visible = false;
+      }
     }
 
     // Frame the trajectory: fit the camera distance to the trajectory extent
@@ -889,14 +1152,20 @@ export function Scene3D() {
         const d = Math.hypot(positions[i], positions[i + 1], positions[i + 2]);
         if (d > maxR) maxR = d;
       }
-      const bodyR = (centre === 'earth' ? R_EARTH : R_MOON) * S;
+      const bodyR = CENTRAL_RADIUS[centre] * activeScale;
       // Frame on the trajectory extent, not on the body: a 500 km LEO ring sits
       // only 8% outside the Earth's limb, so padding by the body radius would
       // push the camera far enough out to hide the orbit entirely.
       // At a 45 deg vertical field of view the visible half-height at the
       // origin is distance * tan(22.5 deg) = 0.414 * distance, so a factor of
       // 3.0 leaves the trajectory occupying ~80% of the frame height.
-      const fit = Math.max(maxR, bodyR * 1.05) * 3.0;
+      // Heliocentrically the interesting context is the planetary orbits,
+      // not just the trajectory: a run that only reaches 1.2 AU should still
+      // show Mars, or there is no way to see that it fell short. So the fit
+      // includes the outermost drawn orbit when the trajectory is smaller.
+      const contextR =
+        centre === 'sun' ? Math.max(maxR, 1.6 * AU * activeScale) : maxR;
+      const fit = Math.max(contextR, bodyR * 1.05) * 3.0;
       const dir = r.camera.position.clone().normalize();
       if (dir.lengthSq() === 0) dir.set(0.6, -0.6, 0.4).normalize();
       r.camera.position.copy(dir.multiplyScalar(fit));
@@ -905,7 +1174,7 @@ export function Scene3D() {
       r.camera.updateProjectionMatrix();
       r.controls.update();
     }
-  }, [positions, samples, centre, result]);
+  }, [positions, samples, centre, activeScale, result]);
 
   // --- Retheme --------------------------------------------------------
   // Runs on mount too, which is harmless (it re-applies the palette the scene

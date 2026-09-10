@@ -7,6 +7,7 @@ import { RAD, SEC_PER_DAY } from '../core/constants.ts';
 import {
   formatAccel,
   formatDuration,
+  formatAu,
   formatLength,
   formatVelocity,
   fixed,
@@ -18,6 +19,7 @@ import { View2D } from './viz/View2D.tsx';
 const CAMERA_LABELS: Record<CameraTarget, string> = {
   earth: 'Earth',
   moon: 'Moon',
+  sun: 'Sun',
   spacecraft: 'Craft',
   free: 'Free',
 };
@@ -37,8 +39,11 @@ export function Viewport() {
   const toggleFullTrajectory = useStore((s) => s.toggleFullTrajectory);
   const result = useStore((s) => s.result);
 
+  const centre = result?.config.centralBody ?? 'earth';
+  const isHeliocentric = centre === 'sun';
   const isMoonRelevant =
-    result?.config.centralBody === 'moon' || (result?.config.forces.moonGravity ?? false);
+    !isHeliocentric &&
+    (centre === 'moon' || (result?.config.forces.moonGravity ?? false));
 
   return (
     <div className="viewport">
@@ -63,23 +68,39 @@ export function Viewport() {
         {viewMode === '3d' && (
           <div className="seg">
             <span className="seg-label">Camera</span>
-            {(['earth', 'moon', 'spacecraft', 'free'] as CameraTarget[]).map((c) => (
-              <button
-                key={c}
-                className={cameraTarget === c ? 'active' : ''}
-                onClick={() => setCameraTarget(c)}
-                disabled={c === 'moon' && !isMoonRelevant}
-                title={
-                  c === 'moon' && !isMoonRelevant
-                    ? 'Enable lunar gravity or choose a lunar scenario'
-                    : c === 'free'
-                      ? 'Stop following any body; drag to look around freely'
-                      : `Keep the camera centred on the ${CAMERA_LABELS[c]}`
-                }
-              >
-                {CAMERA_LABELS[c]}
-              </button>
-            ))}
+            {(
+              [
+                // The Sun only appears as a camera target heliocentrically:
+                // in a planet-centred frame it is 1 AU away and following it
+                // would simply fling the camera out of the scene.
+                ...(isHeliocentric ? (['sun'] as CameraTarget[]) : []),
+                'earth',
+                'moon',
+                'spacecraft',
+                'free',
+              ] as CameraTarget[]
+            ).map((c) => {
+              const disabled = c === 'moon' && !isMoonRelevant;
+              return (
+                <button
+                  key={c}
+                  className={cameraTarget === c ? 'active' : ''}
+                  onClick={() => setCameraTarget(c)}
+                  disabled={disabled}
+                  title={
+                    disabled
+                      ? isHeliocentric
+                        ? 'The Moon is not drawn separately at heliocentric scale'
+                        : 'Enable lunar gravity or choose a lunar scenario'
+                      : c === 'free'
+                        ? 'Stop following any body; drag to look around freely'
+                        : `Keep the camera centred on the ${CAMERA_LABELS[c]}`
+                  }
+                >
+                  {CAMERA_LABELS[c]}
+                </button>
+              );
+            })}
           </div>
         )}
 
@@ -149,18 +170,26 @@ function Hud() {
   }
 
   const isEarth = result.config.centralBody === 'earth';
+  const isHeliocentric = result.config.centralBody === 'sun';
 
   return (
     <div className="hud">
       <div className="hud-title">Live state</div>
       <Row label="Mission time" value={formatDuration(sample.t)} />
       <Row label="Day" value={fixed(sample.t / SEC_PER_DAY, 3)} />
-      <Row label="Altitude" value={formatLength(sample.altitude)} />
+      {isHeliocentric ? (
+        <Row label="Solar distance" value={formatAu(sample.radius)} />
+      ) : (
+        <Row label="Altitude" value={formatLength(sample.altitude)} />
+      )}
       <Row label="Speed" value={formatVelocity(sample.speed)} />
       <Row label="Sail accel" value={formatAccel(sample.sailAccel)} />
       <Row label="Sun incidence" value={`${fixed(sample.incidence * RAD, 1)} deg`} />
       <Row label="Sunlit" value={`${(sample.illumination * 100).toFixed(0)}%`} />
-      <Row label="Semi-major axis" value={formatLength(sample.sma)} />
+      <Row
+        label="Semi-major axis"
+        value={isHeliocentric ? formatAu(sample.sma) : formatLength(sample.sma)}
+      />
       <Row label="Eccentricity" value={fixed(sample.ecc, 5)} />
       <Row label="Inclination" value={`${fixed(sample.inc * RAD, 3)} deg`} />
       {Number.isFinite(sample.period) && sample.period > 0 && (
@@ -172,7 +201,10 @@ function Hud() {
           />
         </>
       )}
-      {(result.config.forces.moonGravity || !isEarth) && (
+      {isHeliocentric && Number.isFinite(sample.targetDistance) && (
+        <Row label="To target" value={formatAu(sample.targetDistance)} />
+      )}
+      {!isHeliocentric && (result.config.forces.moonGravity || !isEarth) && (
         <Row label="Moon distance" value={formatLength(sample.moonDistance)} />
       )}
     </div>

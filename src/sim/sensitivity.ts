@@ -6,7 +6,7 @@
  * samples so the UI stays responsive and can show progress.
  */
 
-import { DEG, RAD, SEC_PER_DAY } from '../core/constants.ts';
+import { AU, DEG, RAD, SEC_PER_DAY } from '../core/constants.ts';
 import { totalMass } from '../core/sail/sail.ts';
 import { meanElementSeries } from './analysis.ts';
 import { propagate } from './propagator.ts';
@@ -95,7 +95,10 @@ export type SweepMetric =
   | 'deltaVEquivalent'
   | 'meanSailAccel'
   | 'minMoonDistance'
-  | 'eclipseFraction';
+  | 'eclipseFraction'
+  | 'maxSolarDistance'
+  | 'minTargetDistance'
+  | 'finalEnergy';
 
 export interface SweepMetricSpec {
   label: string;
@@ -125,6 +128,25 @@ export const SWEEP_METRICS: Record<SweepMetric, SweepMetricSpec> = {
   },
   minMoonDistance: { label: 'Closest lunar approach', unit: 'km', scale: (x) => x / 1000 },
   eclipseFraction: { label: 'Eclipse fraction', unit: '%', scale: (x) => x * 100 },
+
+  // Heliocentric metrics. The mean-element metrics above are unusable on a
+  // spiral - there are no repeating revolutions to average over - so the
+  // interplanetary questions are asked directly of the summary instead.
+  maxSolarDistance: {
+    label: 'Furthest solar distance reached',
+    unit: 'AU',
+    scale: (x) => x / AU,
+  },
+  minTargetDistance: {
+    label: 'Closest approach to the target planet',
+    unit: 'AU',
+    scale: (x) => x / AU,
+  },
+  finalEnergy: {
+    label: 'Final specific orbital energy (positive = escaped)',
+    unit: 'MJ/kg',
+    scale: (x) => x / 1e6,
+  },
 };
 
 export interface SweepRequest {
@@ -175,7 +197,7 @@ export function applySweepValue(
       cfg.sail.area = Math.max(1e-6, value);
       break;
     case 'spacecraftMass':
-      cfg.spacecraft = { dryMass: Math.max(1e-6, value), propellantMass: 0 };
+      cfg.spacecraft = { ...cfg.spacecraft, dryMass: Math.max(1e-6, value), propellantMass: 0 };
       break;
     case 'attitudeAngle1': {
       const rad = value * DEG;
@@ -225,6 +247,12 @@ export function extractMetric(result: SimulationResult, metric: SweepMetric): nu
       return summary.eclipseFraction;
     case 'minMoonDistance':
       return Number.isFinite(summary.minMoonDistance) ? summary.minMoonDistance : null;
+    case 'maxSolarDistance':
+      return summary.maxSolarDistance > 0 ? summary.maxSolarDistance : null;
+    case 'minTargetDistance':
+      return Number.isFinite(summary.minTargetDistance) ? summary.minTargetDistance : null;
+    case 'finalEnergy':
+      return summary.finalEnergy;
     default:
       break;
   }

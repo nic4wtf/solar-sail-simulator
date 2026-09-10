@@ -15,24 +15,23 @@
  * lunar propagation never blocks input.
  */
 
-import {
-  MOON_SOI_RADIUS,
-  MU_MOON,
-  R_EARTH,
-  R_MOON,
-  SEC_PER_DAY,
-} from '../core/constants.ts';
+import { AU, MOON_SOI_RADIUS, MU_MOON, SEC_PER_DAY } from '../core/constants.ts';
 import { type Vec3, dot, norm, sub, unit, clamp } from '../core/vec3.ts';
 import { rvToElements } from '../core/orbital/elements.ts';
 import { toRsw } from '../core/orbital/frames.ts';
 import { elementsToRv } from '../core/orbital/elements.ts';
-import { evaluateEnvironment } from '../core/environment/environment.ts';
+import {
+  CENTRAL_MU,
+  CENTRAL_RADIUS,
+  evaluateEnvironment,
+} from '../core/environment/environment.ts';
+import { PLANET_FACTS, planetState } from '../core/environment/planets.ts';
 import { isoToJd } from '../core/environment/time.ts';
 import {
   type DynamicsConfig,
   acceleration,
   evaluateForces,
-  srpMagnitudeOnly,
+  impulseSample,
 } from '../core/forces/forceModel.ts';
 import { dopri45Step, rk4Step } from '../core/integrator/integrators.ts';
 import { totalMass } from '../core/sail/sail.ts';
@@ -70,11 +69,14 @@ export function buildDynamics(config: SimulationConfig): DynamicsConfig {
       epochJd: isoToJd(config.epoch),
       centre: config.centralBody,
       moonModel: config.moonModel,
+      planets: config.perturbingPlanets ?? [],
     },
     toggles: config.forces,
     sail: config.sail,
+    spacecraft: config.spacecraft,
     attitude: config.attitude,
     mass: totalMass(config.spacecraft),
+    atmosphereActivity: config.atmosphereActivity ?? 'mean',
   };
 }
 
@@ -89,8 +91,8 @@ export function initialStateVector(config: SimulationConfig): { r: Vec3; v: Vec3
   if (config.initial.mode === 'cartesian') {
     return { r: [...config.initial.position], v: [...config.initial.velocity] };
   }
-  const bodyRadius = config.centralBody === 'earth' ? R_EARTH : R_MOON;
-  const mu = config.centralBody === 'earth' ? 3.986004418e14 : MU_MOON;
+  const bodyRadius = CENTRAL_RADIUS[config.centralBody];
+  const mu = CENTRAL_MU[config.centralBody];
   const ecc = clamp(config.initial.eccentricity, 0, 0.999);
   const rp = bodyRadius + config.initial.altitude;
   const sma = rp / (1 - ecc);
@@ -123,8 +125,13 @@ export async function propagate(
   const startWall = performance.now();
   const dyn = buildDynamics(config);
   const { integration: integ } = config;
-  const bodyRadius = config.centralBody === 'earth' ? R_EARTH : R_MOON;
+  const bodyRadius = CENTRAL_RADIUS[config.centralBody];
   const yieldEnabled = options.yieldToEventLoop !== false;
+
+  // Target-planet tracking. Evaluated only at recorded samples, not inside
+  // the integrator: it is a diagnostic, not a force.
+  const targetId = config.targetBody;
+  const targetFacts = targetId ? PLANET_FACTS[targetId] : null;
 
   // Count acceleration evaluations by wrapping the hot function.
   let evaluations = 0;
@@ -155,8 +162,11 @@ export async function propagate(
 
   // Running accumulators
   let deltaV = 0;
+  let dragDeltaV = 0;
   let sailAccelSum = 0;
+  let dragAccelSum = 0;
   let sailAccelCount = 0;
+  let maxAirDensity = 0;
   let eclipseTime = 0;
   let minAltitude = Infinity;
   let maxAltitude = -Infinity;
@@ -165,6 +175,12 @@ export async function propagate(
   let moonRelSpeedAtClosest = 0;
   let enteredLunarSoi = false;
   let insideSoi = false;
+  let minTargetDistance = Infinity;
+  let minTargetDistanceTime = 0;
+  let enteredTargetSoi = false;
+  let insideTargetSoi = false;
+  let minSolarDistance = Infinity;
+  let maxSolarDistance = 0;
 
   let steps = 0;
   let rejectedSteps = 0;
@@ -198,6 +214,21 @@ export async function propagate(
     ];
     const hHat = unit(hVec);
     const betaAngle = Math.asin(clamp(dot(toSun, hHat), -1, 1));
+
+    // Distance to the target planet, if one is configured. The planet state
+    // is heliocentric, so it is shifted into the integration frame by the
+    // Sun's position in that frame - which is zero heliocentrically.
+    let targetDistance = Infinity;
+    if (targetId) {
+      const helio = planetState(targetId, b.env.jd).position;
+      targetDistance = norm(
+        sub(r, [
+          helio[0] + b.env.sun.position[0],
+          helio[1] + b.env.sun.position[1],
+          helio[2] + b.env.sun.position[2],
+        ]),
+      );
+    }
 
     samples.push({
       t,
@@ -238,11 +269,17 @@ export async function propagate(
       steer1: b.attitude.angles[0],
       steer2: b.attitude.angles[1],
       illumination: b.illumination,
+      dragAccel: norm(b.drag),
+      airDensity: b.dragDetail.density,
+      dragArea: b.dragDetail.dragArea,
+      earthRadiationAccel: norm(b.earthRadiation),
       earthDistance: earthDist,
       moonDistance: moonDist,
       sunDistance: b.srpDetail.solarDistance,
+      targetDistance,
       betaAngle,
       deltaVEquivalent: deltaV,
+      dragDeltaVEquivalent: dragDeltaV,
     });
 
     // Extremes and mission metrics
@@ -274,7 +311,32 @@ export async function propagate(
       });
     }
 
+    const solarDist = b.srpDetail.solarDistance;
+    if (solarDist < minSolarDistance) minSolarDistance = solarDist;
+    if (solarDist > maxSolarDistance) maxSolarDistance = solarDist;
+
+    if (targetFacts && targetDistance < minTargetDistance) {
+      minTargetDistance = targetDistance;
+      minTargetDistanceTime = t;
+    }
+    if (targetFacts) {
+      if (targetDistance < targetFacts.soiRadius && !insideTargetSoi) {
+        insideTargetSoi = true;
+        enteredTargetSoi = true;
+        events.push({
+          kind: 'targetSoiEntry',
+          t,
+          severity: 'info',
+          message: `Entered the sphere of influence of ${targetFacts.name} (${(targetDistance / 1e6).toFixed(0)} thousand km) at day ${(t / SEC_PER_DAY).toFixed(1)}. Beyond this boundary the heliocentric two-body picture this run integrates stops being the right one - see the Results panel.`,
+        });
+      } else if (targetDistance >= targetFacts.soiRadius && insideTargetSoi) {
+        insideTargetSoi = false;
+      }
+    }
+
     sailAccelSum += aSrpMag;
+    dragAccelSum += norm(b.drag);
+    if (b.dragDetail.density > maxAirDensity) maxAirDensity = b.dragDetail.density;
     sailAccelCount++;
   };
 
@@ -328,12 +390,13 @@ export async function propagate(
     sinceYield++;
 
     if (accepted) {
-      // Accumulate the impulse budget and the eclipse time over the step,
-      // evaluated at the step end point. `srpMagnitudeOnly` is the trimmed
-      // SRP path - the full diagnostic evaluation is reserved for recorded
+      // Accumulate the impulse budgets and the eclipse time over the step,
+      // evaluated at the step end point. `impulseSample` is the trimmed
+      // path - the full diagnostic evaluation is reserved for recorded
       // samples, where it is amortised over many steps.
-      const lite = srpMagnitudeOnly(dyn, t, r, v);
-      deltaV += lite.accel * hTry;
+      const lite = impulseSample(dyn, t, r, v);
+      deltaV += lite.sailAccel * hTry;
+      dragDeltaV += lite.dragAccel * hTry;
       if (lite.illumination < 1) eclipseTime += hTry * (1 - lite.illumination);
 
       t += hTry;
@@ -423,7 +486,10 @@ export async function propagate(
     maxStep,
     wallClockMs: performance.now() - startWall,
     deltaV,
+    dragDeltaV,
     meanSailAccel: sailAccelCount > 0 ? sailAccelSum / sailAccelCount : 0,
+    meanDragAccel: sailAccelCount > 0 ? dragAccelSum / sailAccelCount : 0,
+    maxAirDensity,
     eclipseFraction: t > 0 ? eclipseTime / t : 0,
     minAltitude,
     maxAltitude,
@@ -431,6 +497,11 @@ export async function propagate(
     minMoonDistanceTime,
     moonRelSpeedAtClosest,
     enteredLunarSoi,
+    minTargetDistance,
+    minTargetDistanceTime,
+    enteredTargetSoi,
+    minSolarDistance,
+    maxSolarDistance,
     finalTime: t,
   });
 
@@ -444,7 +515,11 @@ export async function propagate(
         'The final state has positive specific orbital energy with respect to the central body: the spacecraft is on an escape trajectory.',
     });
   }
-  if (Number.isFinite(summary.minMoonDistance) && summary.minMoonDistance < 1e9) {
+  if (
+    config.centralBody !== 'sun' &&
+    Number.isFinite(summary.minMoonDistance) &&
+    summary.minMoonDistance < 1e9
+  ) {
     events.push({
       kind: 'lunarClosestApproach',
       t: summary.minMoonDistanceTime,
@@ -452,12 +527,40 @@ export async function propagate(
       message: `Closest lunar approach: ${(summary.minMoonDistance / 1000).toFixed(0)} km at day ${(summary.minMoonDistanceTime / SEC_PER_DAY).toFixed(2)}, relative speed ${(summary.moonRelativeSpeedAtClosest / 1000).toFixed(3)} km/s.`,
     });
   }
-  if (Number.isFinite(minAltitude) && minAltitude < 200e3 && termination !== 'impact') {
+  if (targetFacts && Number.isFinite(summary.minTargetDistance)) {
+    events.push({
+      kind: 'targetClosestApproach',
+      t: summary.minTargetDistanceTime,
+      severity: 'info',
+      message: `Closest approach to ${targetFacts.name}: ${(summary.minTargetDistance / 1e9).toFixed(3)} million km (${(summary.minTargetDistance / AU).toFixed(4)} AU) at day ${(summary.minTargetDistanceTime / SEC_PER_DAY).toFixed(1)}.`,
+    });
+  }
+
+  const dragOn = config.forces.atmosphericDrag && config.centralBody === 'earth';
+  if (
+    config.centralBody === 'earth' &&
+    Number.isFinite(minAltitude) &&
+    minAltitude < 400e3 &&
+    termination !== 'impact'
+  ) {
     events.push({
       kind: 'minAltitude',
       t: 0,
       severity: 'warning',
-      message: `Minimum altitude reached ${(minAltitude / 1000).toFixed(0)} km. Below roughly 400 km atmospheric drag would dominate the sail force, and drag is NOT modelled.`,
+      message: dragOn
+        ? `Minimum altitude reached ${(minAltitude / 1000).toFixed(0)} km, where atmospheric density is highly variable. Drag IS modelled here, but with a static exponential atmosphere - the real density at this altitude can differ by a factor of several with solar activity.`
+        : `Minimum altitude reached ${(minAltitude / 1000).toFixed(0)} km. Below roughly 400 km atmospheric drag dominates the sail force, and drag is switched OFF in this run. Enable it in the Simulation panel.`,
+    });
+  }
+  // The single most important thing to tell a user about a LEO sail run: the
+  // atmosphere may simply have overwhelmed whatever the sail did. Stated as a
+  // ratio of the two impulse budgets, both of which are already accumulated.
+  if (dragOn && summary.dragDeltaVEquivalent > summary.deltaVEquivalent && summary.dragDeltaVEquivalent > 0) {
+    events.push({
+      kind: 'dragDominant',
+      t: 0,
+      severity: 'warning',
+      message: `Atmospheric drag removed ${summary.dragDeltaVEquivalent.toFixed(2)} m/s of impulse against the sail's ${summary.deltaVEquivalent.toFixed(2)} m/s - a ratio of ${(summary.dragDeltaVEquivalent / Math.max(1e-9, summary.deltaVEquivalent)).toFixed(1)}:1. At this altitude the orbit is decaying regardless of the steering law; raising the orbit needs a higher starting altitude, not better steering.`,
     });
   }
 
@@ -475,7 +578,10 @@ interface SummaryInput {
   maxStep: number;
   wallClockMs: number;
   deltaV: number;
+  dragDeltaV: number;
   meanSailAccel: number;
+  meanDragAccel: number;
+  maxAirDensity: number;
   eclipseFraction: number;
   minAltitude: number;
   maxAltitude: number;
@@ -483,6 +589,11 @@ interface SummaryInput {
   minMoonDistanceTime: number;
   moonRelSpeedAtClosest: number;
   enteredLunarSoi: boolean;
+  minTargetDistance: number;
+  minTargetDistanceTime: number;
+  enteredTargetSoi: boolean;
+  minSolarDistance: number;
+  maxSolarDistance: number;
   finalTime: number;
   finalMoonDistance: number;
   finalMoonRelSpeed: number;
@@ -536,8 +647,17 @@ function buildSummary(inp: SummaryInput): SimulationSummary {
     minMoonDistanceTime: inp.minMoonDistanceTime,
     moonRelativeSpeedAtClosest: inp.moonRelSpeedAtClosest,
 
+    minTargetDistance: inp.minTargetDistance,
+    minTargetDistanceTime: inp.minTargetDistanceTime,
+    enteredTargetSoi: inp.enteredTargetSoi,
+    minSolarDistance: Number.isFinite(inp.minSolarDistance) ? inp.minSolarDistance : 0,
+    maxSolarDistance: inp.maxSolarDistance,
+
     deltaVEquivalent: inp.deltaV,
+    dragDeltaVEquivalent: inp.dragDeltaV,
     meanSailAccel: inp.meanSailAccel,
+    meanDragAccel: inp.meanDragAccel,
+    maxAirDensity: inp.maxAirDensity,
     eclipseFraction: inp.eclipseFraction,
     escaped: (last?.energy ?? -1) >= 0,
     enteredLunarSoi: inp.enteredLunarSoi,

@@ -197,7 +197,7 @@ describe('non-ideal optical model', () => {
 
 describe('characteristic acceleration', () => {
   it('is 2 P0 (A/m) for an ideal sail', () => {
-    const perf = sailPerformance({ ...IDEAL_SAIL, area: 100 }, { dryMass: 100, propellantMass: 0 });
+    const perf = sailPerformance({ ...IDEAL_SAIL, area: 100 }, { ...DEFAULT_SPACECRAFT, dryMass: 100 });
     expect(perf.areaToMass).toBeCloseTo(1, 12);
     expect(perf.characteristicAcceleration).toBeCloseTo(2 * SRP_1AU_CLASSICAL * 1, 15);
     // 9.13 um/s^2 for 1 m^2/kg - the standard textbook figure.
@@ -217,7 +217,7 @@ describe('characteristic acceleration', () => {
     // which for an ideal sail means A/m = 5.93e-3 / (2 * 4.563e-6) = 650 m^2/kg.
     const perf = sailPerformance(
       { ...IDEAL_SAIL, area: 650 },
-      { dryMass: 1, propellantMass: 0 },
+      { ...DEFAULT_SPACECRAFT, dryMass: 1 },
     );
     expect(perf.lightnessNumber).toBeCloseTo(1, 1);
   });

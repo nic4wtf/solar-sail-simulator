@@ -9,7 +9,9 @@
  */
 
 import { useMemo } from 'react';
-import { MOON_SOI_RADIUS, RAD, SEC_PER_DAY } from '../../core/constants.ts';
+import { AU, MOON_SOI_RADIUS, RAD, SEC_PER_DAY } from '../../core/constants.ts';
+import { PLANET_FACTS } from '../../core/environment/planets.ts';
+import { transferReference } from '../../sim/scenarios.ts';
 import {
   formatAccel,
   formatDuration,
@@ -73,6 +75,14 @@ export function ResultsPanel() {
     kind: 'info' as const,
   };
   const isEarth = result.config.centralBody === 'earth';
+  const isHeliocentric = result.config.centralBody === 'sun';
+  const target = result.config.targetBody;
+  const targetFacts = target ? PLANET_FACTS[target] : null;
+  const reachedTargetOrbit =
+    targetFacts && target
+      ? summary.maxSolarDistance >= transferReference(target).targetSma * 0.98 &&
+        summary.minSolarDistance <= transferReference(target).targetSma * 1.02
+      : false;
 
   return (
     <div className="panel-body">
@@ -154,7 +164,46 @@ export function ResultsPanel() {
             value={formatVelocity(report.deltaVEquivalent)}
             help="The integral of the sail acceleration MAGNITUDE over the run. It counts force in every direction regardless of whether it was useful, so it is an upper bound on achievable delta-v, NOT a manoeuvre delta-v. The realised orbital change is below."
           />
+          {report.dragDeltaV !== null && (
+            <>
+              <Readout
+                label="Drag impulse removed"
+                value={formatVelocity(report.dragDeltaV)}
+                kind={report.dragToSailRatio !== null && report.dragToSailRatio > 1 ? 'bad' : 'neutral'}
+                help="The integral of the drag deceleration over the run, on the same footing as the sail impulse above. Unlike the sail impulse it is not an upper bound on anything - every metre per second of it came straight out of the orbit."
+              />
+              <Readout
+                label="Drag against sail"
+                value={
+                  report.dragToSailRatio !== null
+                    ? `${sig(report.dragToSailRatio, 3)} : 1`
+                    : 'n/a'
+                }
+                emphasis
+                kind={
+                  report.dragToSailRatio === null
+                    ? 'neutral'
+                    : report.dragToSailRatio > 1
+                      ? 'bad'
+                      : report.dragToSailRatio > 0.2
+                        ? 'neutral'
+                        : 'good'
+                }
+                help="Drag impulse divided by sail impulse. Above 1 the atmosphere is taking more momentum than the sail supplies, and no steering law changes that - only a higher orbit or a smaller sail-to-mass ratio will."
+              />
+            </>
+          )}
         </ReadoutGrid>
+
+        {report.dragToSailRatio !== null && report.dragToSailRatio > 1 && (
+          <Notice kind="warning" title="The atmosphere is winning">
+            Drag removed {sig(report.dragToSailRatio, 3)} times the impulse the sail
+            supplied. This is the honest answer for a large sail at this altitude, and it
+            is why a sail is a far better deorbit device than an orbit-raising one in low
+            Earth orbit. Compare steering laws higher up, or switch drag off in the
+            Simulation panel to isolate the sail's own behaviour.
+          </Notice>
+        )}
 
         <Notice kind="info" title="Why these two blocks differ">
           The characteristic acceleration assumes the sail faces the Sun squarely in full
@@ -165,6 +214,82 @@ export function ResultsPanel() {
           {report.dutyFactor > 0 ? (1 / report.dutyFactor).toFixed(1) : '-'}.
         </Notice>
       </Section>
+
+      {isHeliocentric && (
+        <Section
+          title="Interplanetary outcome"
+          subtitle="Where the trajectory actually went. Nothing here was aimed: there is no departure hyperbola, no launch-window search and no arrival manoeuvre in this model."
+        >
+          <ReadoutGrid>
+            <Readout
+              label="Solar distance range"
+              value={`${sig(summary.minSolarDistance / AU, 3)} - ${sig(summary.maxSolarDistance / AU, 3)} AU`}
+              emphasis
+            />
+            <Readout
+              label="Final specific energy"
+              value={`${sig(summary.finalEnergy / 1e6, 4)} MJ/kg`}
+              kind={summary.escaped ? 'good' : 'neutral'}
+              help="Negative is bound to the Sun, positive is on an escape trajectory. This is the number the escape scenario exists to move across zero."
+            />
+            {targetFacts && (
+              <>
+                <Readout
+                  label={`Closest approach to ${targetFacts.name}`}
+                  value={
+                    Number.isFinite(summary.minTargetDistance)
+                      ? `${sig(summary.minTargetDistance / AU, 3)} AU`
+                      : 'not tracked'
+                  }
+                  emphasis
+                  kind={summary.enteredTargetSoi ? 'good' : 'neutral'}
+                />
+                <Readout
+                  label={`Reached ${targetFacts.name} orbital radius`}
+                  value={reachedTargetOrbit ? 'yes' : 'no'}
+                  kind={reachedTargetOrbit ? 'good' : 'bad'}
+                  help="Whether the trajectory ever crossed the target's heliocentric distance. This is a completely different question from whether it came near the planet, and a sail can do the first without doing the second."
+                />
+                <Readout
+                  label={`Entered ${targetFacts.name} sphere of influence`}
+                  value={summary.enteredTargetSoi ? 'yes' : 'no'}
+                  kind={summary.enteredTargetSoi ? 'good' : 'neutral'}
+                  help={`The SOI radius is ${(targetFacts.soiRadius / 1e9).toFixed(2)} million km. Inside it the heliocentric two-body picture this run integrates is no longer the right one, and the result should be treated as "arrived in the neighbourhood" rather than as an arrival trajectory.`}
+                />
+              </>
+            )}
+          </ReadoutGrid>
+
+          {targetFacts && reachedTargetOrbit && !summary.enteredTargetSoi && (
+            <Notice kind="info" title={`Reached ${targetFacts.name}'s orbit, not ${targetFacts.name}`}>
+              The sail got the spacecraft to the right heliocentric distance and the planet
+              was somewhere else at the time. That gap is exactly what a launch window
+              closes, and nothing in this model phases the departure - the epoch and the
+              spiral rate decide where the planet happens to be on arrival. The Mission
+              panel reports the synodic period, which is how often the opportunity comes
+              round.
+            </Notice>
+          )}
+
+          {summary.enteredTargetSoi && (
+            <Notice kind="warning" title="Inside the sphere of influence">
+              The trajectory entered {targetFacts?.name}&apos;s sphere of influence, where a
+              heliocentric two-body integration with the planet as a perturbation stops
+              being the right formulation. The approach geometry here is indicative of an
+              encounter, not a capture solution - there is no patched-conic switch and no
+              arrival manoeuvre in this model.
+            </Notice>
+          )}
+
+          {summary.escaped && (
+            <Notice kind="success" title="Solar escape">
+              The final state has positive specific orbital energy with respect to the Sun.
+              With no propellant expended, that is the whole solar-sail argument in one
+              number.
+            </Notice>
+          )}
+        </Section>
+      )}
 
       {/* ------------------ Realised orbital change ------------------ */}
       <Section
@@ -234,6 +359,13 @@ export function ResultsPanel() {
                     value={formatVelocity(report.equivalentHohmannDeltaV)}
                     help="The two-burn Hohmann delta-v that would produce the same change in semi-major axis. A yardstick for interpreting the result, NOT something the sail performed."
                   />
+                  {report.impulseEfficiency === null && report.dragToSailRatio !== null && (
+                    <Readout
+                      label="Useful fraction of impulse budget"
+                      value="not attributable"
+                      help="This ratio only means something when the sail is the only non-gravitational force acting. Drag is contributing a significant share of the change in semi-major axis here, so dividing that change by the SAIL's impulse would describe the atmosphere, not the steering law. Switch drag off in the Simulation panel to measure the steering law on its own."
+                    />
+                  )}
                   {report.impulseEfficiency !== null && (
                     <Readout
                       label="Useful fraction of impulse budget"
@@ -372,7 +504,10 @@ export function ResultsPanel() {
         </ReadoutGrid>
       </Section>
 
-      {(result.config.forces.moonGravity || !isEarth) && (
+      {/* Lunar encounter figures are meaningless heliocentrically: the Moon is
+          simply never near, and reporting a "closest lunar approach" of 0.1 AU
+          invites reading it as a result. */}
+      {!isHeliocentric && (result.config.forces.moonGravity || !isEarth) && (
         <Section title="Lunar encounter">
           <ReadoutGrid>
             <Readout

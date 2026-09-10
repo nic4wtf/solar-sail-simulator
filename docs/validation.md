@@ -1,6 +1,6 @@
 # Validation and error budget
 
-`npm test` runs **173 tests** across six suites. This document records what
+`npm test` runs **299 tests** across eight suites. This document records what
 they check, the measured numbers, and the resulting error budget.
 
 | Suite | Tests | Covers |
@@ -9,6 +9,8 @@ they check, the measured numbers, and the resulting error budget.
 | [`srp.test.ts`](../src/test/srp.test.ts) | 24 | Radiation pressure, sail force law, orientation behaviour, eclipse geometry |
 | [`attitude.test.ts`](../src/test/attitude.test.ts) | 33 | Reference frames, steering laws, schedule interpolation, expression parser |
 | [`environment.test.ts`](../src/test/environment.test.ts) | 28 | Time conversions, solar and lunar ephemerides, gravity term magnitudes |
+| [`perturbations.test.ts`](../src/test/perturbations.test.ts) | 49 | Atmosphere and drag, Earth albedo and infrared, J2/J3 against their potentials |
+| [`interplanetary.test.ts`](../src/test/interplanetary.test.ts) | 71 | Planetary ephemerides, the heliocentric frame, the lightness-number escape threshold |
 | [`scenarios.test.ts`](../src/test/scenarios.test.ts) | 36 | Every scenario and preset, orbit-raising behaviour, lunar transfer, export, sweeps |
 | [`theme.test.ts`](../src/test/theme.test.ts) | 42 | CSS/JS palette parity, WCAG contrast in both themes, renderer palette validity |
 
@@ -327,6 +329,105 @@ The `r = 0` test is the important one: it is the defining property of the
 third-body formulation and the thing most easily got wrong by dropping the
 indirect term.
 
+### Zonal harmonics against their own potential
+
+J2 and J3 are hand-derived closed forms. A sign slip in either is invisible
+until it is checked against the potential it claims to come from, so both are
+compared with a central-difference gradient of
+
+```
+U_n = -(mu/r) J_n (Re/r)^n P_n(z/r)
+```
+
+at six positions spanning equatorial, polar and general geometry.
+
+| Check | Result |
+| --- | --- |
+| J2 acceleration = grad(U_2) | ✅ to 1e-6 relative (limited by the finite difference, not the formula) |
+| J3 acceleration = grad(U_3) | ✅ to 1e-6 relative |
+| J3 / J2 magnitude ratio in LEO | ✅ 1e-3 to 2e-2 (theory ≈ 4e-3) |
+| J3 in-plane components vanish on the equator | ✅ exactly |
+| J3 is antisymmetric about the equator | ✅ to 18 dp |
+
+The J2 test is redundant with the code that already shipped — which is the
+point. It pins the sign convention that the J3 derivation was matched against,
+so the two cannot disagree silently.
+
+---
+
+## 9b. Atmospheric drag
+
+### Density model
+
+| Check | Result |
+| --- | --- |
+| Matches Vallado Table 8-4 at nine band bases, 0–1000 km | ✅ |
+| Falls monotonically from the surface to the 2000 km cutoff | ✅ (400 samples) |
+| Exactly zero above the cutoff, < 1e-16 kg/m³ just below it | ✅ |
+| Drops by 1/e over one scale height inside a band | ✅ to 12 dp |
+| Band-crossing scale-height residual | ✅ within 10% |
+| Band-boundary continuity | ✅ ratio 0.7–1.4 across five boundaries |
+| Solar activity leaves the troposphere untouched | ✅ exactly equal at 50 km |
+| Solar activity multipliers apply in full above 200 km | ✅ ×3 and ×0.4 to 6 dp |
+
+The cutoff test matters more than it looks: an abrupt truncation is only
+acceptable if the density there is already irrelevant, otherwise it introduces
+a genuine discontinuity in the dynamics.
+
+### Drag force
+
+| Check | Result |
+| --- | --- |
+| **Drag never does positive work** — `a · v < 0` | ✅ over 40 sampled states, altitudes and sail orientations |
+| Broadside sail exposes bus + full sail area | ✅ to 6 dp |
+| Edge-on sail exposes the bus only | ✅ to 6 dp |
+| Attitude authority over the decay rate | ✅ > 50× (measured 101× at the defaults) |
+| Matches the drag equation evaluated by hand at 400 km | ✅ to 20 dp |
+| Co-rotation subtracts ω×r from the inertial velocity | ✅ 494 m/s at 400 km, 6% of orbital speed |
+| Zero at GEO | ✅ exactly |
+
+The work test is the global one. Drag is the only dissipative term in the
+model, and a sign error anywhere in the relative-velocity construction would
+show up as an orbit that gains energy — which is exactly what a plausible
+trajectory plot would hide.
+
+### Integration-level consequences
+
+| Check | Result |
+| --- | --- |
+| A sail that raises a 500 km orbit **decays** once drag is on | ✅ +sma → −sma |
+| Drag impulse exceeds sail impulse at 500 km | ✅ 9.19 vs 0.96 m/s over 7 days |
+| A bigger sail decays faster (the deorbit-sail result) | ✅ |
+| Drag diagnostics finite and bounded on every sample | ✅ |
+| Drag impulse is monotonically non-decreasing | ✅ |
+| GEO is bit-identical with drag on and off | ✅ to 6 dp |
+| Drag and J3 refuse to act about the Moon | ✅ exactly zero |
+| Every new term is exactly zero when toggled off | ✅ |
+
+---
+
+## 9c. Earth albedo and infrared
+
+| Check | Result |
+| --- | --- |
+| Infrared matches `M (Re/r)²` exactly | ✅ to 18 dp |
+| Infrared irradiance at 500 km | ✅ 206 W/m², handbook range 195–215 |
+| **Infrared still acts in eclipse** | ✅ non-zero and radially outward on the night side |
+| Albedo vanishes on the night side | ✅ < 1e-20 N/m² |
+| Albedo irradiance over the subsolar point | ✅ 300–353 W/m² |
+| Albedo falls monotonically from subsolar to terminator | ✅ |
+| Phase factor hits its closed-form limits | ✅ 1, 2/3, 2/3π and 0 to 12 dp |
+| Falls off as 1/r² | ✅ factor 4 for double distance |
+| Negligible at lunar distance | ✅ < 1e-3 of the 1 AU sail acceleration |
+| Zero beyond the 100-Earth-radius cutoff | ✅ exactly |
+| Total flux at 500 km, as a fraction of direct sunlight | ✅ 30–50% |
+| Momentum is purely radial | ✅ to 9 dp |
+
+The eclipse test is the one worth keeping: the infrared term is the only force
+in the whole model that is *on* precisely when the sail is supposedly doing
+nothing, and any refactor that folds Earth radiation into the eclipse gate
+would silently delete it.
+
 ---
 
 ## 10. Scenario-level integration
@@ -335,6 +436,12 @@ Every scenario (14) and every preset (7) is propagated and checked for finite
 state, no numerical failure, and physically bounded sail acceleration.
 
 ### Orbit-raising behaviour
+
+Measured with drag and Earth radiation **disabled**, because these tests are
+about the steering law rather than the net LEO outcome. With drag on, the
+100 m² / 100 kg default has a ballistic coefficient near 1 kg/m² and the
+atmosphere swamps the signal being measured — a real result, asserted
+separately in §9b, and noise here.
 
 | Check | Result |
 | --- | --- |
@@ -393,6 +500,95 @@ linear, as expected while the response stays in the small-perturbation regime.
 
 ---
 
+## 10b. Interplanetary
+
+### Planetary ephemerides
+
+Every check here is against astronomy, not against the code.
+
+| Check | Result |
+| --- | --- |
+| Semi-major axis, all eight planets | ✅ within 0.1% of published |
+| Sidereal period, all eight planets | ✅ within 0.2% of published |
+| **Kepler third law against the solar GM** | ✅ `a³/P² = mu/4pi²` to 10 dp |
+| Stays between perihelion and aphelion, 1950-2050 | ✅ |
+| Speed obeys vis-viva | ✅ to 9 dp |
+| Orbit plane inclination to the ecliptic | ✅ within 0.1° of published, all eight |
+| **Positions are EQUATORIAL, not ecliptic** | ✅ Earth orbit normal sits 23.44° from the J2000 pole |
+| Earth perihelion 0.9833 AU in early January | ✅ |
+| Earth aphelion 1.0167 AU in early July | ✅ |
+| Synodic period Earth-Mars 779.9 d, Earth-Venus 583.9 d | ✅ |
+| Solar series Earth vs table Earth-Moon barycentre | ✅ < 60,000 km over 2000-2050 |
+
+The equatorial check is the one that matters most and looks least important.
+Dropping the ecliptic-to-equatorial rotation entirely would leave every
+trajectory looking completely reasonable — it would simply be in the wrong
+frame.
+
+> The Earth cross-check caught a **real bug**. The planetary elements are
+> referred to the equinox of J2000; `sun.ts` and `moon.ts` work in the equinox
+> of date. Uncorrected, the planets rotate against the Sun and Moon by 0.7°
+> over 2000-2050 — 1.8 million km at 1 AU. The check failed by a factor of
+> thirty and nothing else in the suite noticed. Fixed by precessing the
+> elements into the equinox of date; see
+> [`interplanetary-model.md`](interplanetary-model.md) §2.
+
+### The heliocentric frame
+
+| Check | Result |
+| --- | --- |
+| Sun at the origin, mu and radius correct | ✅ |
+| Earth at 1 AU, Moon beside it and not at the origin | ✅ |
+| **Same planet, seen from the Sun and from the Earth, differs by exactly the Sun-Earth vector** | ✅ to 1e-9 AU |
+| No planets computed unless asked | ✅ |
+| The Earth is never double-counted as a perturbing planet | ✅ |
+
+### Heliocentric propagation
+
+| Check | Result |
+| --- | --- |
+| Semi-major axis of a 1 AU orbit over a year | ✅ < 1e-10 relative |
+| Specific energy over a year | ✅ < 1e-10 relative |
+| `sunDistance` equals `radius` with the Sun at the origin | ✅ to 1e-12 |
+| Drag, J2 and J3 refuse to act about the Sun even when switched on | ✅ exactly zero |
+| Radiation pressure scaled by r² is constant across a 150:1 range of solar distance | ✅ to 1e-9 |
+
+### The lightness-number escape threshold
+
+The single strongest check in the suite: it ties the ephemeris, the frame, the
+SRP law, the attitude frame and the integrator together against a number that
+can be derived on paper.
+
+A Sun-facing sail reduces the effective gravitational parameter to
+`mu(1 - beta)`, so a spacecraft on a circular orbit escapes when `beta >= 0.5`.
+
+| Check | Result |
+| --- | --- |
+| The test rig builds a sail of exactly the requested beta | ✅ to 9 dp |
+| beta = 0.7 escapes, reaching > 5 AU | ✅ positive final energy |
+| beta = 0.3 stays bound | ✅ |
+| beta = 0.3 apoapsis matches `2(1-beta)/(1-2beta) - 1 = 2.5 AU` | ✅ |
+| beta = 0.3 returns to 1 AU periapsis | ✅ |
+
+### Scenario-level behaviour
+
+| Check | Result |
+| --- | --- |
+| Prograde steering spirals outward, retrograde inward | ✅ both sma and energy |
+| Earth-to-Mars reaches Mars's orbital radius | ✅ 2.08 AU |
+| ...and does NOT reach Mars | ✅ closest approach 2.2 AU, no SOI entry |
+| Solar escape scenario escapes | ✅ final energy +150 MJ/kg |
+| **A sail that cannot escape from 1 AU escapes after a close solar pass** | ✅ beta = 0.14, perihelion 0.089 AU, escaped |
+| Cruise baseline holds sma flat, so later changes are attributable | ✅ < 1e-10 |
+| Target distance recorded on every sample, and the summary minimum matches | ✅ |
+| Target distance is infinite when no target is set | ✅ |
+
+The Mars result is the honest one and is asserted as such: reaching an orbital
+radius and reaching a planet are different achievements, and an unphased
+departure gets the first without the second.
+
+---
+
 ## 11. Summary error budget
 
 | Source | Magnitude | Notes |
@@ -405,13 +601,24 @@ linear, as expected while the response stays in the small-perturbation regime.
 | Eclipse penumbra ramp | few % of a few seconds per revolution | Negligible |
 | Time scale (UTC/TT/TDB conflation) | Sun 3e-4°, Moon ~35 km | Below the ephemeris error |
 | Sail optical coefficients | not quantified | **Likely the largest real-world uncertainty** |
-| Unmodelled drag below ~400 km | orders of magnitude | Results there are illustrative only |
+| Atmospheric density | factor of ~3 either way at 400–600 km | **Dominates every LEO drag result** |
+| Albedo phase model | ~3% at full phase, tens of % near the terminator | Absolute flux there is a few percent of peak |
+| Earth albedo field (single global mean) | up to a factor of 2 instantaneously | Much smaller after revolution averaging |
+| Sail optical coefficients applied to thermal IR | not quantified | A fraction of a term that is itself a fraction |
+| Planetary ephemerides | arcseconds (inner), < 1 arcmin (outer) | Negligible next to the sail model |
+| Earth position, solar series vs planetary table | < 60,000 km over 2000-2050 | Bounds the one frame inconsistency the model accepts |
+| Heliocentric departure idealisation | not quantifiable | No departure leg is modelled at all - see below |
 
-**For LEO sail studies the mean-element resolution floor, not the integrator,
-is what limits a result.** For lunar work the ephemeris dominates. For any
-comparison against a real mission, the optical coefficients and unmodelled sail
-mechanics are almost certainly the largest error — which is why the tool exposes
-every coefficient rather than burying them.
+**For LEO sail studies below about 600 km the atmosphere is now the binding
+uncertainty**, and it is not close: a factor of three in density is a factor of
+three in the decay rate, against a mean-element floor of tens of metres. Run
+both solar-activity extremes and treat the spread as the answer.
+
+Above the atmosphere, the mean-element resolution floor rather than the
+integrator is what limits a result. For lunar work the ephemeris dominates. For
+any comparison against a real mission, the optical coefficients and unmodelled
+sail mechanics are almost certainly the largest error — which is why the tool
+exposes every coefficient rather than burying them.
 
 ---
 
@@ -454,7 +661,7 @@ screenshot of the 3D viewport:
 ## 13. Reproducing these numbers
 
 ```bash
-npm test                              # all 131 tests
+npm test                              # all 299 tests
 npx vitest run src/test/srp.test.ts   # one suite
 npm run test:watch                    # watch mode
 ```

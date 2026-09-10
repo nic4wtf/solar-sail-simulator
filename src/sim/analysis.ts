@@ -18,7 +18,12 @@
  * distinction is visible rather than hidden.
  */
 
-import { AU, MU_EARTH, MU_MOON, R_EARTH, R_MOON, SEC_PER_DAY } from '../core/constants.ts';
+import { AU, SEC_PER_DAY } from '../core/constants.ts';
+import {
+  type CentralBody,
+  CENTRAL_MU,
+  CENTRAL_RADIUS,
+} from '../core/environment/environment.ts';
 import { hohmannDeltaV } from '../core/orbital/elements.ts';
 import { sailPerformance, type SailConfig, type SpacecraftConfig } from '../core/sail/sail.ts';
 import { pressureAt } from '../core/sail/sail.ts';
@@ -311,6 +316,16 @@ export interface FeasibilityReport {
   /** Ratio of the impulse budget spent to the useful Hohmann-equivalent. */
   impulseEfficiency: number | null;
 
+  /**
+   * Total drag impulse over the run [m/s], and its ratio to the sail impulse.
+   *
+   * The ratio is the single most decisive number for a LEO sail: above 1 the
+   * atmosphere is removing more momentum than the sail is adding, and no
+   * steering law recovers that. Null when drag was not modelled.
+   */
+  dragDeltaV: number | null;
+  dragToSailRatio: number | null;
+
   warnings: string[];
 }
 
@@ -390,16 +405,35 @@ export function feasibilityReport(
     };
   });
 
+  // --- Drag against the sail -------------------------------------------
+  const dragModelled =
+    result.config.forces.atmosphericDrag && result.config.centralBody === 'earth';
+  const dragDeltaV = dragModelled ? summary.dragDeltaVEquivalent : null;
+  const dragToSailRatio =
+    dragDeltaV !== null && summary.deltaVEquivalent > 0
+      ? dragDeltaV / summary.deltaVEquivalent
+      : null;
+
   // Hohmann yardstick for the achieved semi-major axis change.
-  const mu = result.config.centralBody === 'earth' ? MU_EARTH : MU_MOON;
+  const mu = CENTRAL_MU[result.config.centralBody];
   let equivalentHohmannDeltaV: number | null = null;
   let impulseEfficiency: number | null = null;
   if (deltaSma !== null && Math.abs(deltaSma) > 1e-6 && startSma > 0) {
     const target = startSma + deltaSma;
     if (target > 0) {
       equivalentHohmannDeltaV = hohmannDeltaV(startSma, target, mu);
+      // The efficiency ratio silently assumes the SAIL caused the whole
+      // change in semi-major axis. Once drag is contributing more than a few
+      // percent of the non-gravitational impulse that assumption is false,
+      // and the ratio stops being a statement about the steering law: a
+      // drag-driven decay divided by a small sail impulse produces a
+      // spectacular and completely meaningless "efficiency". So it is
+      // withheld rather than shown with a caveat.
+      const sailIsResponsible = dragToSailRatio === null || dragToSailRatio <= 0.05;
       impulseEfficiency =
-        summary.deltaVEquivalent > 0 ? equivalentHohmannDeltaV / summary.deltaVEquivalent : null;
+        sailIsResponsible && summary.deltaVEquivalent > 0
+          ? equivalentHohmannDeltaV / summary.deltaVEquivalent
+          : null;
     }
   }
 
@@ -434,9 +468,23 @@ export function feasibilityReport(
     );
   }
   if (!mean.valid && mean.note) warnings.push(mean.note);
-  if (summary.minAltitude < 400e3 && result.config.centralBody === 'earth') {
+  if (summary.minAltitude < 400e3 && result.config.centralBody === 'earth' && !dragModelled) {
     warnings.push(
-      'The trajectory dips below 400 km, where atmospheric drag would dominate the sail force. Drag is NOT modelled in this version.',
+      'The trajectory dips below 400 km, where atmospheric drag dominates the sail force by orders of magnitude - and drag is switched OFF in this run. The altitude change reported here may well have the wrong sign. Enable atmospheric drag in the Simulation panel.',
+    );
+  }
+  if (dragToSailRatio !== null && dragToSailRatio > 1) {
+    warnings.push(
+      `Atmospheric drag removed ${dragToSailRatio.toFixed(1)}x more impulse than the sail supplied (${summary.dragDeltaVEquivalent.toFixed(2)} m/s against ${summary.deltaVEquivalent.toFixed(2)} m/s). At this altitude the orbit decays whatever the steering law does; the sail can only change how fast. Start higher, or shrink the sail relative to the mass, before comparing steering laws here.`,
+    );
+  } else if (dragToSailRatio !== null && dragToSailRatio > 0.2) {
+    warnings.push(
+      `Atmospheric drag is spending ${(dragToSailRatio * 100).toFixed(0)}% of the sail's impulse budget. The sail is still winning, but the margin depends on an atmosphere model whose real uncertainty is a factor of several - re-run at solar maximum before trusting the size of the result.`,
+    );
+  }
+  if (dragModelled && summary.maxAirDensity > 0 && result.config.atmosphereActivity === 'mean') {
+    warnings.push(
+      'Drag figures assume nominal solar activity. Thermospheric density spans roughly an order of magnitude over the solar cycle, so the decay rate should be read as a scale rather than a prediction.',
     );
   }
 
@@ -459,6 +507,8 @@ export function feasibilityReport(
     mean,
     equivalentHohmannDeltaV,
     impulseEfficiency,
+    dragDeltaV,
+    dragToSailRatio,
     warnings,
   };
 }
@@ -480,5 +530,4 @@ export const REFERENCE_SAILS: ReadonlyArray<{
 // Body reference radius helper
 // ---------------------------------------------------------------------------
 
-export const bodyRadiusFor = (centre: 'earth' | 'moon'): number =>
-  centre === 'earth' ? R_EARTH : R_MOON;
+export const bodyRadiusFor = (centre: CentralBody): number => CENTRAL_RADIUS[centre];

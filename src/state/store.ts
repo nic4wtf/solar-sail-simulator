@@ -33,7 +33,7 @@ export type RunState = 'idle' | 'propagating' | 'ready' | 'playing';
 
 export type ViewMode = '3d' | '2d';
 
-export type CameraTarget = 'earth' | 'moon' | 'spacecraft' | 'free';
+export type CameraTarget = 'earth' | 'moon' | 'sun' | 'spacecraft' | 'free';
 
 export type PanelTab =
   | 'mission'

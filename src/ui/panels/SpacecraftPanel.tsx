@@ -1,16 +1,17 @@
 /**
- * Spacecraft panel: mass budget and the initial orbit.
+ * Spacecraft panel: mass budget, drag properties, and the initial orbit in
+ * full.
+ *
+ * The Mission panel now carries the common case (dry mass, sail area, the
+ * orbital elements). What stays here is everything you would change to make
+ * the SAME question more precise: the propellant line of the mass budget, the
+ * aerodynamic properties, and the frame documentation.
  */
 
-import { DEG, MU_EARTH, MU_MOON, R_EARTH, R_MOON } from '../../core/constants.ts';
-import {
-  circularSpeed,
-  escapeSpeed,
-  periodFromSma,
-} from '../../core/orbital/elements.ts';
-import { totalMass } from '../../core/sail/sail.ts';
-import { formatDuration, formatLength, formatVelocity, radToDeg, sig } from '../../core/units.ts';
-import { initialStateVector } from '../../sim/propagator.ts';
+import { DEFAULT_SPACECRAFT, totalMass } from '../../core/sail/sail.ts';
+import { ballisticCoefficient } from '../../core/forces/drag.ts';
+import { atmosphericDensity } from '../../core/environment/atmosphere.ts';
+import { formatDuration, formatLength, formatVelocity, sig } from '../../core/units.ts';
 import { useStore } from '../../state/store.ts';
 import {
   Collapsible,
@@ -20,63 +21,30 @@ import {
   ReadoutGrid,
   Section,
 } from '../widgets/Controls.tsx';
+import { InitialOrbitFields } from './blocks/InitialOrbitFields.tsx';
+import { centralBodyFacts, deriveInitialOrbit } from './blocks/orbitDerived.ts';
 
 export function SpacecraftPanel() {
   const config = useStore((s) => s.config);
   const setConfig = useStore((s) => s.setConfig);
 
   const mass = totalMass(config.spacecraft);
-  const isEarth = config.centralBody === 'earth';
-  const bodyRadius = isEarth ? R_EARTH : R_MOON;
-  const mu = isEarth ? MU_EARTH : MU_MOON;
-  const bodyName = isEarth ? 'Earth' : 'Moon';
+  const { isEarth, name: bodyName } = centralBodyFacts(config);
+  const derived = deriveInitialOrbit(config);
+  const dragOn = config.forces.atmosphericDrag && isEarth;
 
-  // Derived orbit figures, computed from the actual initial state so that a
-  // Cartesian initial condition is described just as accurately as an
-  // element-based one.
-  let derived: {
-    radius: number;
-    speed: number;
-    sma: number;
-    period: number;
-    vCirc: number;
-    vEsc: number;
-    apoapsis: number;
-    periapsis: number;
-  } | null = null;
-  try {
-    const { r, v } = initialStateVector(config);
-    const rMag = Math.hypot(r[0], r[1], r[2]);
-    const vMag = Math.hypot(v[0], v[1], v[2]);
-    const energy = (vMag * vMag) / 2 - mu / rMag;
-    const sma = energy < 0 ? -mu / (2 * energy) : Infinity;
-    const hx = r[1] * v[2] - r[2] * v[1];
-    const hy = r[2] * v[0] - r[0] * v[2];
-    const hz = r[0] * v[1] - r[1] * v[0];
-    const h = Math.hypot(hx, hy, hz);
-    const p = (h * h) / mu;
-    const ecc = Number.isFinite(sma) ? Math.sqrt(Math.max(0, 1 - p / sma)) : 1;
-    derived = {
-      radius: rMag,
-      speed: vMag,
-      sma,
-      period: Number.isFinite(sma) ? periodFromSma(sma, mu) : Infinity,
-      vCirc: circularSpeed(rMag, mu),
-      vEsc: escapeSpeed(rMag, mu),
-      apoapsis: Number.isFinite(sma) ? sma * (1 + ecc) : Infinity,
-      periapsis: Number.isFinite(sma) ? sma * (1 - ecc) : rMag,
-    };
-  } catch {
-    derived = null;
-  }
-
-  const isElements = config.initial.mode === 'elements';
+  // Ballistic coefficient at both attitude extremes. The pair is the point:
+  // for a sail these two numbers are two orders of magnitude apart, and the
+  // attitude law chooses between them every second of the mission.
+  const { busArea, dragCoefficient } = config.spacecraft;
+  const bBroadside = ballisticCoefficient(mass, dragCoefficient, busArea + config.sail.area);
+  const bEdgeOn = ballisticCoefficient(mass, dragCoefficient, busArea);
 
   return (
     <div className="panel-body">
       <Section
         title="Mass budget"
-        subtitle="Propellant mass is carried for completeness of the budget only. Version 1 has no thruster model, so propellant is never expended and simply adds inert mass."
+        subtitle="Propellant mass is carried for completeness of the budget only. There is no thruster model, so propellant is never expended and simply adds inert mass."
       >
         <NumberField
           label="Dry mass"
@@ -109,155 +77,90 @@ export function SpacecraftPanel() {
         </ReadoutGrid>
       </Section>
 
-      <Section title="Initial orbit" subtitle={`About the ${bodyName}, in the inertial integration frame.`}>
-        {!isElements && (
-          <Notice kind="info" title="Cartesian initial state">
-            This scenario specifies the initial state as a position and velocity vector
-            rather than as orbital elements, because it is a transfer trajectory rather
-            than a closed orbit. Switch to element entry below to edit it as an orbit
-            instead - doing so will discard the aimed transfer geometry.
-            <div style={{ marginTop: 6 }}>
-              <button
-                className="btn btn-sm"
-                onClick={() =>
-                  setConfig((c) => {
-                    const rMag = derived?.radius ?? bodyRadius + 500e3;
-                    c.initial = {
-                      mode: 'elements',
-                      altitude: Math.max(1000, rMag - bodyRadius),
-                      eccentricity: 0,
-                      inclination: 28.5 * DEG,
-                      raan: 0,
-                      argumentOfPeriapsis: 0,
-                      trueAnomaly: 0,
-                    };
-                  })
-                }
-              >
-                Convert to orbital elements
-              </button>
-            </div>
+      <Section
+        title="Aerodynamics"
+        subtitle="Used by the atmospheric drag model. The sail supplies its own drag area, projected on the relative wind, on top of the bus cross-section below."
+      >
+        <div className="field-row">
+          <NumberField
+            label="Bus cross-section"
+            unit="m^2"
+            value={busArea}
+            min={0}
+            max={10000}
+            onChange={(v) =>
+              setConfig((c) => {
+                c.spacecraft.busArea = v;
+              })
+            }
+            help="Constant, orientation-independent area of the spacecraft body. Taken as tumble-averaged; it is swamped by the sail whenever the sail is not edge-on."
+          />
+          <NumberField
+            label="Drag coefficient"
+            unit="-"
+            value={dragCoefficient}
+            min={0}
+            max={5}
+            step={0.05}
+            decimals={2}
+            onChange={(v) =>
+              setConfig((c) => {
+                c.spacecraft.dragCoefficient = v;
+              })
+            }
+            help="Free-molecular value referred to the projected area. 2.2 is conventional for a satellite in the upper atmosphere; 2.0 to 2.4 are all defensible, and that spread is smaller than the uncertainty in the density model it multiplies."
+          />
+        </div>
+
+        <ReadoutGrid>
+          <Readout
+            label="Ballistic coefficient, sail broadside"
+            value={`${sig(bBroadside, 3)} kg/m^2`}
+            help="m / (Cd A) with the full sail facing the wind. A cubesat is around 50 kg/m^2 and a spent rocket body around 100; a sail is one to two orders of magnitude below both, which is why it cannot ignore the atmosphere in LEO."
+            kind={bBroadside < 5 ? 'bad' : 'neutral'}
+          />
+          <Readout
+            label="Ballistic coefficient, sail edge-on"
+            value={`${sig(bEdgeOn, 3)} kg/m^2`}
+            help="With the sail feathered, only the bus is exposed. The ratio between these two numbers is the attitude authority the spacecraft has over its own decay rate."
+          />
+          <Readout
+            label="Attitude authority over decay"
+            value={`${sig(bEdgeOn / bBroadside, 3)}x`}
+            emphasis
+            help="How much slower the orbit decays feathered than broadside. This coupling is what makes deorbit sails work, and it is also why a steering law designed purely against the Sun line can be badly wrong in LEO."
+          />
+          {derived && isEarth && (
+            <Readout
+              label="Density at the initial altitude"
+              value={`${atmosphericDensity(derived.altitude, config.atmosphereActivity).toExponential(2)} kg/m^3`}
+            />
+          )}
+        </ReadoutGrid>
+
+        {!dragOn && (
+          <Notice kind="info">
+            Atmospheric drag is currently switched off for this run, so these figures are
+            informational only. Enable it in the Simulation panel.
           </Notice>
         )}
-
-        {isElements && config.initial.mode === 'elements' && (
-          <>
-            <NumberField
-              label="Periapsis altitude"
-              unit="km"
-              value={config.initial.altitude / 1000}
-              min={50}
-              max={500000}
-              onChange={(v) =>
-                setConfig((c) => {
-                  if (c.initial.mode === 'elements') c.initial.altitude = v * 1000;
-                })
-              }
-              help={`Height of the lowest point of the orbit above the ${bodyName} reference radius (${(bodyRadius / 1000).toFixed(0)} km). For a circular orbit this is simply the orbit altitude.`}
-              message={
-                isEarth && config.initial.altitude < 400e3
-                  ? 'Below about 400 km atmospheric drag exceeds the sail force by orders of magnitude, and drag is not modelled.'
-                  : undefined
-              }
-            />
-            <NumberField
-              label="Eccentricity"
-              unit="-"
-              value={config.initial.eccentricity}
-              min={0}
-              max={0.99}
-              step={0.005}
-              slider
-              decimals={4}
-              onChange={(v) =>
-                setConfig((c) => {
-                  if (c.initial.mode === 'elements') c.initial.eccentricity = v;
-                })
-              }
-              help="0 is circular. Above about 0.3 a fixed timestep struggles to cover both periapsis and apoapsis - use the adaptive integrator."
-              message={
-                config.initial.eccentricity > 0.3 && config.integration.integrator === 'rk4'
-                  ? 'Consider the adaptive integrator at this eccentricity, or reduce the timestep.'
-                  : undefined
-              }
-            />
-            <div className="field-row">
-              <NumberField
-                label="Inclination"
-                unit="deg"
-                value={radToDeg(config.initial.inclination)}
-                min={0}
-                max={180}
-                step={0.5}
-                decimals={2}
-                onChange={(v) =>
-                  setConfig((c) => {
-                    if (c.initial.mode === 'elements') c.initial.inclination = v * DEG;
-                  })
-                }
-                help="Angle between the orbit plane and the equator. Above 90 degrees the orbit is retrograde."
-              />
-              <NumberField
-                label="RAAN"
-                unit="deg"
-                value={radToDeg(config.initial.raan)}
-                min={0}
-                max={360}
-                step={1}
-                decimals={2}
-                onChange={(v) =>
-                  setConfig((c) => {
-                    if (c.initial.mode === 'elements') c.initial.raan = v * DEG;
-                  })
-                }
-                help="Right ascension of the ascending node. Together with the epoch this fixes the orbit plane relative to the Sun, which is what determines the beta angle and therefore how much of the orbit is eclipsed."
-              />
-            </div>
-            <div className="field-row">
-              <NumberField
-                label="Argument of periapsis"
-                unit="deg"
-                value={radToDeg(config.initial.argumentOfPeriapsis)}
-                min={0}
-                max={360}
-                step={1}
-                decimals={2}
-                onChange={(v) =>
-                  setConfig((c) => {
-                    if (c.initial.mode === 'elements')
-                      c.initial.argumentOfPeriapsis = v * DEG;
-                  })
-                }
-                help="Angle from the ascending node to periapsis, measured in the orbit plane."
-              />
-              <NumberField
-                label="True anomaly"
-                unit="deg"
-                value={radToDeg(config.initial.trueAnomaly)}
-                min={0}
-                max={360}
-                step={1}
-                decimals={2}
-                onChange={(v) =>
-                  setConfig((c) => {
-                    if (c.initial.mode === 'elements') c.initial.trueAnomaly = v * DEG;
-                  })
-                }
-                help="Starting position along the orbit, measured from periapsis."
-              />
-            </div>
-          </>
+        {config.spacecraft.busArea === 0 && (
+          <Notice kind="warning">
+            With a zero bus area a feathered sail has exactly no drag, which no real
+            spacecraft achieves. {DEFAULT_SPACECRAFT.busArea} m^2 is the default.
+          </Notice>
         )}
+      </Section>
+
+      <Section title="Initial orbit" subtitle={`About the ${bodyName}, in the inertial integration frame.`}>
+        <InitialOrbitFields derived={derived} />
       </Section>
 
       {derived && (
         <Section title="Derived initial conditions">
           <ReadoutGrid>
             <Readout label="Radius" value={formatLength(derived.radius)} />
-            <Readout
-              label="Altitude"
-              value={formatLength(derived.radius - bodyRadius)}
-            />
+            <Readout label="Altitude" value={formatLength(derived.altitude)} />
             <Readout label="Initial speed" value={formatVelocity(derived.speed)} emphasis />
             <Readout
               label="Circular speed here"
@@ -270,15 +173,11 @@ export function SpacecraftPanel() {
             <Readout label="Apoapsis radius" value={formatLength(derived.apoapsis)} />
             <Readout
               label="Orbital period"
-              value={
-                Number.isFinite(derived.period)
-                  ? formatDuration(derived.period)
-                  : 'unbound trajectory'
-              }
+              value={derived.unbound ? 'unbound trajectory' : formatDuration(derived.period)}
             />
           </ReadoutGrid>
 
-          {derived.speed > derived.vEsc && (
+          {derived.unbound && (
             <Notice kind="warning" title="Escape trajectory">
               The initial speed exceeds the local escape speed, so this is an unbound
               trajectory. Mean orbital elements will not be available.
@@ -305,6 +204,12 @@ export function SpacecraftPanel() {
             Earth equator, not to the lunar equator or the ecliptic. This is stated
             explicitly because it is a common source of confusion when comparing against
             published lunar orbit parameters.
+          </p>
+          <p>
+            The atmosphere is assumed to <em>co-rotate rigidly with the Earth</em>, so the
+            drag model works against <code>v - omega_E x r</code> rather than the inertial
+            velocity. At 400 km that is a 494 m/s correction, about 6% of the orbital
+            speed and 12% of the drag.
           </p>
         </div>
       </Collapsible>

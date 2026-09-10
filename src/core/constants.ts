@@ -50,7 +50,7 @@ export const R_SUN = 6.957e8;
 /** Second zonal harmonic (oblateness) — dimensionless. */
 export const J2_EARTH = 1.08262668e-3;
 
-/** Third zonal harmonic — dimensionless (pear-shape term, unused in V1). */
+/** Third zonal harmonic — dimensionless (pear-shape, north-south asymmetric). */
 export const J3_EARTH = -2.53265649e-6;
 
 // ---------------------------------------------------------------------------
@@ -78,6 +78,29 @@ export const SOLAR_IRRADIANCE_1AU_MODERN = 1361;
  */
 export const SRP_1AU_CLASSICAL = SOLAR_IRRADIANCE_1AU_CLASSICAL / C_LIGHT;
 export const SRP_1AU_MODERN = SOLAR_IRRADIANCE_1AU_MODERN / C_LIGHT;
+
+/**
+ * Earth Bond albedo [-] — the globally and annually averaged fraction of
+ * incident sunlight reflected back to space (CERES/ERBE).
+ *
+ * A single global mean stands in for a field that really varies from ~0.1
+ * over dark ocean to ~0.8 over fresh snow and thick cloud, so an instantaneous
+ * albedo flux from this model can be wrong by a factor of two. The
+ * REVOLUTION-AVERAGED value, which is what matters for a secular orbit
+ * effect, is much better than that.
+ */
+export const EARTH_ALBEDO = 0.30;
+
+/**
+ * Earth outgoing longwave radiation [W/m^2] — mean thermal exitance of the
+ * Earth-atmosphere system (CERES).
+ *
+ * Note it is close to (1 - albedo) * S / 4 = 239 W/m^2, as it must be for a
+ * planet in radiative equilibrium. Unlike albedo this does NOT vanish on the
+ * night side, which is what makes the infrared term qualitatively different:
+ * it keeps pushing through eclipse.
+ */
+export const EARTH_IR_EXITANCE = 240;
 
 // ---------------------------------------------------------------------------
 // Time

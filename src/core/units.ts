@@ -6,7 +6,7 @@
  * never leak into the physics.
  */
 
-import { DEG, RAD, SEC_PER_DAY, SEC_PER_HOUR } from './constants.ts';
+import { AU, DEG, RAD, SEC_PER_DAY, SEC_PER_HOUR } from './constants.ts';
 
 // ---------------------------------------------------------------------------
 // Conversions (SI <-> display)
@@ -111,3 +111,18 @@ export function formatVelocity(ms: number): string {
 export const formatAngle = (rad: number, decimals = 2) => `${fixed(radToDeg(rad), decimals)} deg`;
 
 export const formatPressure = (nm2: number) => `${sig(paToUpa(nm2), 4)} uN/m^2`;
+
+/** Distance in astronomical units, the working unit of interplanetary work. */
+export const formatAu = (metres: number, digits = 4): string =>
+  `${sig(metres / AU, digits)} AU`;
+
+/**
+ * Distance formatted for the frame it belongs to: AU heliocentrically, km
+ * about a planet.
+ *
+ * Both are the unit a reader of that regime expects, and neither is right for
+ * the other: "2.28e8 km" is Mars to nobody, and "3.4e-5 AU" is a LEO altitude
+ * to nobody.
+ */
+export const formatDistanceFor = (metres: number, heliocentric: boolean): string =>
+  heliocentric ? formatAu(metres) : formatLength(metres);

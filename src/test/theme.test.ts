@@ -181,6 +181,10 @@ describe('renderer palettes', () => {
     'earthAtmosphere',
     'moonSurface',
     'moonOrbitLine',
+    'sunSurface',
+    'sunGlow',
+    'planetSurface',
+    'planetOrbitLine',
     'trailColor',
     'futureColor',
     'craftColor',
@@ -210,6 +214,7 @@ describe('renderer palettes', () => {
       'ambientIntensity',
       'sunLightIntensity',
       'earthAtmosphereOpacity',
+      'sunGlowOpacity',
       'futureOpacity',
       'sailPlaneOpacity',
     ]);

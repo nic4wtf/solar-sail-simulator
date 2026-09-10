@@ -5,7 +5,8 @@
  * the whole application deployable as static files with no backend.
  */
 
-import { RAD } from '../core/constants.ts';
+import { AU, RAD } from '../core/constants.ts';
+import { CENTRAL_BODY_LABELS } from '../core/environment/environment.ts';
 import { jdToIso } from '../core/environment/time.ts';
 import type { SimulationConfig, SimulationResult } from './types.ts';
 import type { SweepResult } from './sensitivity.ts';
@@ -77,11 +78,21 @@ export function trajectoryToCsv(result: SimulationResult): string {
     { header: 'steer_angle_2_deg', value: (r) => r.steer2 * RAD },
     { header: 'illumination_fraction', value: (r) => r.illumination },
 
+    { header: 'drag_accel_um_s2', value: (r) => r.dragAccel * 1e6 },
+    { header: 'air_density_kg_m3', value: (r) => r.airDensity },
+    { header: 'drag_area_m2', value: (r) => r.dragArea },
+    { header: 'earth_radiation_accel_um_s2', value: (r) => r.earthRadiationAccel * 1e6 },
+
     { header: 'earth_distance_km', value: (r) => r.earthDistance / 1000 },
     { header: 'moon_distance_km', value: (r) => r.moonDistance / 1000 },
-    { header: 'sun_distance_au', value: (r) => r.sunDistance / 1.495978707e11 },
+    { header: 'sun_distance_au', value: (r) => r.sunDistance / AU },
+    {
+      header: 'target_distance_au',
+      value: (r) => (Number.isFinite(r.targetDistance) ? r.targetDistance / AU : ''),
+    },
     { header: 'beta_angle_deg', value: (r) => r.betaAngle * RAD },
     { header: 'delta_v_equivalent_m_s', value: (r) => r.deltaVEquivalent },
+    { header: 'drag_delta_v_equivalent_m_s', value: (r) => r.dragDeltaVEquivalent },
   ];
 
   const lines: string[] = [];
@@ -92,7 +103,11 @@ export function trajectoryToCsv(result: SimulationResult): string {
   lines.push(`# configuration: ${config.name}`);
   lines.push(`# scenario: ${config.scenarioId}`);
   lines.push(`# epoch (UTC): ${config.epoch}`);
-  lines.push(`# frame: ${config.centralBody === 'earth' ? 'Earth-centred inertial (J2000 equatorial axes)' : 'Moon-centred inertial (J2000 equatorial axes)'}`);
+  lines.push(`# frame: ${CENTRAL_BODY_LABELS[config.centralBody]}`);
+  if (config.targetBody) lines.push(`# target body: ${config.targetBody}`);
+  if (config.perturbingPlanets?.length) {
+    lines.push(`# perturbing planets: ${config.perturbingPlanets.join(', ')}`);
+  }
   lines.push(`# integrator: ${config.integration.integrator}, timestep ${config.integration.timestep} s`);
   lines.push(`# forces: ${Object.entries(config.forces).filter(([, on]) => on).map(([k]) => k).join(', ') || 'none'}`);
   lines.push(`# sail: ${config.sail.area} m^2, model ${config.sail.forceModel}`);
@@ -209,7 +224,11 @@ export function configFromJson(text: string): SimulationConfig {
   for (const key of required) {
     if (cfg[key] === undefined) throw new Error(`Configuration is missing "${key}".`);
   }
-  if (cfg.centralBody !== 'earth' && cfg.centralBody !== 'moon') {
+  if (
+    cfg.centralBody !== 'earth' &&
+    cfg.centralBody !== 'moon' &&
+    cfg.centralBody !== 'sun'
+  ) {
     throw new Error(`Unknown central body "${String(cfg.centralBody)}".`);
   }
   if (!Number.isFinite(Date.parse(String(cfg.epoch)))) {
@@ -223,11 +242,31 @@ export function configFromJson(text: string): SimulationConfig {
   if (!(cfg.spacecraft!.dryMass > 0)) throw new Error('Dry mass must be positive.');
 
   // Fill in fields added after v1 shipped, so older files still load.
+  //
+  // Older files predate the drag and Earth-radiation terms. They load with
+  // those terms OFF, which reproduces the trajectory the file was saved
+  // against - silently switching new physics on would change a saved result
+  // without the user asking.
   return {
     ...cfg,
     name: cfg.name ?? 'Loaded configuration',
     scenarioId: cfg.scenarioId ?? 'earth-custom',
     moonModel: cfg.moonModel ?? 'series',
+    atmosphereActivity: cfg.atmosphereActivity ?? 'mean',
+    perturbingPlanets: cfg.perturbingPlanets ?? [],
+    spacecraft: {
+      ...cfg.spacecraft!,
+      busArea: cfg.spacecraft!.busArea ?? 1,
+      dragCoefficient: cfg.spacecraft!.dragCoefficient ?? 2.2,
+    },
+    forces: {
+      ...cfg.forces!,
+      earthJ3: cfg.forces!.earthJ3 ?? false,
+      atmosphericDrag: cfg.forces!.atmosphericDrag ?? false,
+      earthAlbedo: cfg.forces!.earthAlbedo ?? false,
+      earthInfrared: cfg.forces!.earthInfrared ?? false,
+      planetGravity: cfg.forces!.planetGravity ?? false,
+    },
   } as SimulationConfig;
 }
 

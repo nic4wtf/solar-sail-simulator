@@ -1428,3 +1428,69 @@ textarea.text-input {
     width: 56px;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Mission builder: cross-tab links and the force-model chip row       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * "Full settings for this thing live over there" link.
+ *
+ * Styled as a link rather than a button on purpose: it navigates, it does
+ * not act on the configuration, and every button beside it in these panels
+ * does act. Sitting at the end of a section it reads as a footnote, which is
+ * the right weight for something the common case never needs.
+ */
+.tab-link {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tab-link:hover {
+  text-decoration: underline;
+}
+
+.tab-link:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Compact on/off summary of the force model. */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.chip-on {
+  border-color: var(--ok);
+  color: var(--text-0);
+  background: var(--notice-ok-bg);
+}
+
+/* An off term is deliberately quiet but still legible: the reason it is
+   listed at all is so a surprising result has an obvious thing to check. */
+.chip-off {
+  color: var(--text-2);
+  background: var(--bg-2);
+}

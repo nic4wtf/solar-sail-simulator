@@ -100,34 +100,62 @@ const NO_FORCE = (
   solarDistance,
 });
 
+// ---------------------------------------------------------------------------
+// The flat-plate law itself
+// ---------------------------------------------------------------------------
+
+/** Geometry and force of one flat plate in one radiation field. */
+export interface FlatPlateResult {
+  /** Force vector in the inertial frame [N]. */
+  force: Vec3;
+  /** Effective plate normal actually used (post flip). */
+  normal: Vec3;
+  /** Incidence angle between the radiation direction and the normal [rad]. */
+  incidence: number;
+  /** cos(incidence) [-]. */
+  cosIncidence: number;
+  /** Force component along the plate normal [N]. */
+  normalForce: number;
+  /** Force component in the plate plane [N]. */
+  transverseForce: number;
+  /** True when the commanded normal was flipped to face the source. */
+  flipped: boolean;
+}
+
+const NO_PLATE_FORCE = (normal: Vec3): FlatPlateResult => ({
+  force: ZERO,
+  normal,
+  incidence: Math.PI / 2,
+  cosIncidence: 0,
+  normalForce: 0,
+  transverseForce: 0,
+  flipped: false,
+});
+
 /**
- * Solar radiation pressure force and acceleration.
+ * Force on a flat plate of area `area` in a radiation field of pressure
+ * `pressure` arriving along the unit vector `u`.
  *
- * @param sail          sail configuration
- * @param mass          total spacecraft mass [kg]
- * @param sunToCraftVec vector from the Sun to the spacecraft [m] (not unit)
- * @param commandedNormal unit sail normal from the attitude controller
- * @param illumination  fraction of the solar disc visible, 0..1 (eclipse)
+ * Separated from {@link solarRadiationPressure} because the Earth-radiation
+ * term (albedo and thermal infrared, see `albedo.ts`) is the SAME physics
+ * with a different source: a different pressure, arriving from the nadir
+ * direction instead of the Sun line. Sharing the law means the two terms
+ * cannot drift apart, and means a change to the sail optical model applies to
+ * both automatically.
+ *
+ * @param u unit vector along the direction the photons TRAVEL (source -> plate)
  */
-export function solarRadiationPressure(
+export function flatPlateForce(
   sail: SailConfig,
-  mass: number,
-  sunToCraftVec: Vec3,
+  pressure: number,
+  area: number,
+  u: Vec3,
   commandedNormal: Vec3,
-  illumination = 1,
-): SrpResult {
-  const rSun = norm(sunToCraftVec);
-  const pressure = rSun > 0 ? pressureAt(sail, rSun) * illumination : 0;
-
-  if (pressure <= 0 || illumination <= 0) {
-    return NO_FORCE(pressure, commandedNormal, rSun, illumination);
-  }
-
-  const u = unit(sunToCraftVec);
+): FlatPlateResult {
   let n = unit(commandedNormal);
-  if (norm(n) === 0) return NO_FORCE(pressure, commandedNormal, rSun, illumination);
+  if (pressure <= 0 || area <= 0 || norm(n) === 0) return NO_PLATE_FORCE(commandedNormal);
 
-  // Two-sided sail: the illuminated face is the one turned toward the Sun.
+  // Two-sided sail: the illuminated face is the one turned toward the source.
   let flipped = false;
   let cosAlpha = dot(u, n);
   if (cosAlpha < 0) {
@@ -138,19 +166,17 @@ export function solarRadiationPressure(
   cosAlpha = clamp(cosAlpha, 0, 1);
 
   // Edge-on: the projected area is zero, so there is no force at all.
-  if (cosAlpha <= 1e-12) {
-    return { ...NO_FORCE(pressure, n, rSun, illumination), flipped };
-  }
+  if (cosAlpha <= 1e-12) return { ...NO_PLATE_FORCE(n), flipped };
 
   const alpha = Math.acos(cosAlpha);
   const sinAlpha = Math.sin(alpha);
 
-  // Transverse unit vector: component of u lying in the sail plane.
+  // Transverse unit vector: component of u lying in the plate plane.
   const tVec = sub(u, scale(n, cosAlpha));
   const tNorm = norm(tVec);
   const t: Vec3 = tNorm > 1e-14 ? scale(tVec, 1 / tNorm) : ZERO;
 
-  const PA = pressure * sail.area;
+  const PA = pressure * area;
   let normalForce: number;
   let transverseForce: number;
 
@@ -178,23 +204,60 @@ export function solarRadiationPressure(
     transverseForce = PA * cosAlpha * sinAlpha * (1 - rho * s - tau);
   }
 
-  const force: Vec3 = [
-    normalForce * n[0] + transverseForce * t[0],
-    normalForce * n[1] + transverseForce * t[1],
-    normalForce * n[2] + transverseForce * t[2],
-  ];
-
   return {
-    force,
-    acceleration: scale(force, 1 / mass),
-    pressure,
+    force: [
+      normalForce * n[0] + transverseForce * t[0],
+      normalForce * n[1] + transverseForce * t[1],
+      normalForce * n[2] + transverseForce * t[2],
+    ],
+    normal: n,
     incidence: alpha,
     cosIncidence: cosAlpha,
-    normal: n,
     normalForce,
     transverseForce,
-    illumination,
     flipped,
+  };
+}
+
+/**
+ * Solar radiation pressure force and acceleration.
+ *
+ * @param sail          sail configuration
+ * @param mass          total spacecraft mass [kg]
+ * @param sunToCraftVec vector from the Sun to the spacecraft [m] (not unit)
+ * @param commandedNormal unit sail normal from the attitude controller
+ * @param illumination  fraction of the solar disc visible, 0..1 (eclipse)
+ */
+export function solarRadiationPressure(
+  sail: SailConfig,
+  mass: number,
+  sunToCraftVec: Vec3,
+  commandedNormal: Vec3,
+  illumination = 1,
+): SrpResult {
+  const rSun = norm(sunToCraftVec);
+  const pressure = rSun > 0 ? pressureAt(sail, rSun) * illumination : 0;
+
+  if (pressure <= 0 || illumination <= 0) {
+    return NO_FORCE(pressure, commandedNormal, rSun, illumination);
+  }
+
+  const plate = flatPlateForce(sail, pressure, sail.area, unit(sunToCraftVec), commandedNormal);
+  if (plate.cosIncidence <= 0) {
+    return { ...NO_FORCE(pressure, plate.normal, rSun, illumination), flipped: plate.flipped };
+  }
+
+  return {
+    force: plate.force,
+    acceleration: scale(plate.force, 1 / mass),
+    pressure,
+    incidence: plate.incidence,
+    cosIncidence: plate.cosIncidence,
+    normal: plate.normal,
+    normalForce: plate.normalForce,
+    transverseForce: plate.transverseForce,
+    illumination,
+    flipped: plate.flipped,
     solarDistance: rSun,
   };
 }

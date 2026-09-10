@@ -7,6 +7,8 @@
 
 import type { Vec3 } from '../core/vec3.ts';
 import type { CentralBody } from '../core/environment/environment.ts';
+import type { AtmosphereActivity } from '../core/environment/atmosphere.ts';
+import type { PlanetId } from '../core/environment/planets.ts';
 import type { MoonModel } from '../core/environment/moon.ts';
 import type { ForceToggles } from '../core/forces/forceModel.ts';
 import type { SailConfig, SpacecraftConfig } from '../core/sail/sail.ts';
@@ -70,6 +72,23 @@ export interface SimulationConfig {
   centralBody: CentralBody;
   /** Lunar ephemeris fidelity. */
   moonModel: MoonModel;
+  /** Solar-activity assumption for the atmospheric density model. */
+  atmosphereActivity: AtmosphereActivity;
+  /**
+   * Planets included as perturbing third bodies when `forces.planetGravity`
+   * is on. Only meaningful heliocentrically.
+   */
+  perturbingPlanets: PlanetId[];
+  /**
+   * Planet whose closest approach the run should track, if any.
+   *
+   * This is the interplanetary analogue of the lunar closest-approach
+   * machinery, and it is deliberately the ONLY targeting concept in the tool:
+   * it measures where the trajectory actually went, and makes no attempt to
+   * aim it. Departure hyperbolas, B-plane targeting and launch-window search
+   * belong with the trajectory optimiser (see docs/future-work.md).
+   */
+  targetBody?: PlanetId;
   initial: InitialState;
   spacecraft: SpacecraftConfig;
   sail: SailConfig;
@@ -154,6 +173,18 @@ export interface TrajectorySample {
   /** Illumination fraction, 0..1. */
   illumination: number;
 
+  // Drag
+  /** Atmospheric drag acceleration magnitude [m/s^2]. */
+  dragAccel: number;
+  /** Atmospheric mass density at the spacecraft [kg/m^3]. */
+  airDensity: number;
+  /** Effective drag area including the sail projection [m^2]. */
+  dragArea: number;
+
+  // Earth radiation
+  /** Albedo + infrared acceleration magnitude [m/s^2]. */
+  earthRadiationAccel: number;
+
   // Geometry
   /** Distance to the Earth centre [m]. */
   earthDistance: number;
@@ -161,6 +192,8 @@ export interface TrajectorySample {
   moonDistance: number;
   /** Distance to the Sun [m]. */
   sunDistance: number;
+  /** Distance to the configured target planet [m]. Infinity when none is set. */
+  targetDistance: number;
   /** Sun elevation above the orbit plane (beta angle) [rad]. */
   betaAngle: number;
 
@@ -174,6 +207,13 @@ export interface TrajectorySample {
    * elements above show.
    */
   deltaVEquivalent: number;
+  /**
+   * Integral of |a_drag| dt [m/s] - the impulse the atmosphere has taken out.
+   *
+   * Directly comparable with `deltaVEquivalent`: if this is the larger
+   * number, the atmosphere is winning and no steering law will change that.
+   */
+  dragDeltaVEquivalent: number;
 }
 
 export type SimEventKind =
@@ -183,8 +223,11 @@ export type SimEventKind =
   | 'lunarSoiEntry'
   | 'lunarSoiExit'
   | 'lunarClosestApproach'
+  | 'targetClosestApproach'
+  | 'targetSoiEntry'
   | 'numericalFailure'
-  | 'maxSamples';
+  | 'maxSamples'
+  | 'dragDominant';
 
 export interface SimEvent {
   kind: SimEventKind;
@@ -244,10 +287,27 @@ export interface SimulationSummary {
   /** Spacecraft speed relative to the Moon at closest approach [m/s]. */
   moonRelativeSpeedAtClosest: number;
 
+  /** Closest approach to the configured target planet [m]. Infinity if none. */
+  minTargetDistance: number;
+  /** Time of that closest approach [s]. */
+  minTargetDistanceTime: number;
+  /** Whether the trajectory entered the target planet's sphere of influence. */
+  enteredTargetSoi: boolean;
+  /** Minimum heliocentric radius reached [m]. */
+  minSolarDistance: number;
+  /** Maximum heliocentric radius reached [m]. */
+  maxSolarDistance: number;
+
   /** Total impulse budget accumulated [m/s]. */
   deltaVEquivalent: number;
+  /** Total drag impulse accumulated [m/s]. */
+  dragDeltaVEquivalent: number;
   /** Mean sail acceleration magnitude over the run [m/s^2]. */
   meanSailAccel: number;
+  /** Mean drag acceleration magnitude over the run [m/s^2]. */
+  meanDragAccel: number;
+  /** Highest atmospheric density encountered [kg/m^3]. */
+  maxAirDensity: number;
   /** Fraction of the run spent in any degree of eclipse [-]. */
   eclipseFraction: number;
   /** Whether the final state is on an escape trajectory from the central body. */

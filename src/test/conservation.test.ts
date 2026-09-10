@@ -22,10 +22,15 @@ function twoBodyConfig(overrides: (c: SimulationConfig) => void = () => {}): Sim
   cfg.forces = {
     centralGravity: true,
     earthJ2: false,
+    earthJ3: false,
     moonGravity: false,
     sunGravity: false,
+    planetGravity: false,
     solarRadiationPressure: false,
     eclipse: false,
+    atmosphericDrag: false,
+    earthAlbedo: false,
+    earthInfrared: false,
   };
   overrides(cfg);
   return cfg;

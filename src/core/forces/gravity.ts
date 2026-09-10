@@ -5,7 +5,7 @@
  * supplied by the environment.
  */
 
-import { J2_EARTH, R_EARTH } from '../constants.ts';
+import { J2_EARTH, J3_EARTH, R_EARTH } from '../constants.ts';
 import { type Vec3, ZERO, norm, scale, sub } from '../vec3.ts';
 
 /**
@@ -82,6 +82,47 @@ export function j2Earth(r: Vec3, mu: number): Vec3 {
     factor * (1 - 5 * z2r2) * (r[0] / rMag),
     factor * (1 - 5 * z2r2) * (r[1] / rMag),
     factor * (3 - 5 * z2r2) * (r[2] / rMag),
+  ];
+}
+
+/**
+ * J3 (pear-shape) perturbation of the Earth, in Earth-centred inertial
+ * coordinates.
+ *
+ *   a_x = -(5/2) J3 (mu/r^2) (Re/r)^3 [3 (z/r) - 7 (z/r)^3] (x/r)
+ *   a_y = -(5/2) J3 (mu/r^2) (Re/r)^3 [3 (z/r) - 7 (z/r)^3] (y/r)
+ *   a_z = -(5/2) J3 (mu/r^2) (Re/r)^3 [6 (z/r)^2 - 7 (z/r)^4 - 3/5]
+ *
+ * Reference: Vallado eq. 8-39. Derived as the gradient of
+ * U_3 = -(mu/r) J3 (Re/r)^3 P3(z/r), the same sign convention as
+ * {@link j2Earth}; `conservation.test.ts` checks both against a numerical
+ * gradient of their potentials.
+ *
+ * WHY IT IS HERE. J3 is about 400 times smaller than J2, which sounds
+ * dismissable - but in LEO that still leaves it near 4e-5 m/s^2, several
+ * times LARGER than the acceleration of a 1 m^2/kg sail. It is
+ * north-south asymmetric, so unlike J2 it produces a long-period oscillation
+ * in eccentricity and argument of periapsis rather than a clean secular
+ * regression. For a sail study that matters in one specific way: those are
+ * exactly the elements a sail is trying to move, so leaving J3 out invites
+ * mistaking a gravity-field oscillation for a sail effect.
+ *
+ * It produces no secular change in semi-major axis, so the headline
+ * altitude-raising figures are unaffected either way. Off by default.
+ */
+export function j3Earth(r: Vec3, mu: number): Vec3 {
+  const rMag = norm(r);
+  if (rMag === 0) return ZERO;
+
+  const zr = r[2] / rMag;
+  const zr2 = zr * zr;
+  const factor = -2.5 * J3_EARTH * (mu / (rMag * rMag)) * (R_EARTH / rMag) ** 3;
+  const lateral = factor * (3 * zr - 7 * zr * zr2);
+
+  return [
+    lateral * (r[0] / rMag),
+    lateral * (r[1] / rMag),
+    factor * (6 * zr2 - 7 * zr2 * zr2 - 0.6),
   ];
 }
 

@@ -52,7 +52,8 @@ rules use the velocity direction):
 
 ```
 dr/dt = v
-dv/dt = a_central + a_J2 + a_moon + a_sun + a_srp
+dv/dt = a_central + a_J2 + a_J3 + a_moon + a_sun
+        + a_planets + a_srp + a_drag + a_earthrad
 ```
 
 Each term is individually switchable, and the **Physics / Model** tab lists
@@ -111,9 +112,87 @@ trajectory over weeks.
 semi-major axis oscillate by 11.8 km peak-to-peak in the default LEO. See
 [`validation.md`](validation.md) §4.
 
-### 2.4 Solar radiation pressure
+### 2.4 Earth J3
+
+```
+k   = -(5/2) J3 (mu/r^2) (Re/r)^3
+a_x = k [3 (z/r) - 7 (z/r)^3] x/r
+a_y = k [3 (z/r) - 7 (z/r)^3] y/r
+a_z = k [6 (z/r)^2 - 7 (z/r)^4 - 3/5]
+```
+
+Vallado eq. 8-39. Like J2 it is the gradient of
+`U_n = -(mu/r) J_n (Re/r)^n P_n(z/r)`, and the validation suite checks both
+against a numerical gradient of that potential rather than against each other.
+Off by default: it is several times larger than a 1 m²/kg sail acceleration in
+LEO but produces no secular change in semi-major axis. See
+[`earth-model.md`](earth-model.md) §8.
+
+### 2.5 Atmospheric drag
+
+```
+v_rel = v - omega_E x r
+A_d   = A_bus + A_sail |v_hat_rel . n|
+a     = -(1/2) rho C_D (A_d / m) |v_rel| v_rel
+```
+
+The second line is what makes drag interesting rather than merely necessary on
+a sail: **the sail is the drag area**, and it is under attitude control. The
+same `cos` projection that sets the sail force sets the drag area, but taken
+against a different direction — the relative wind rather than the Sun line.
+Density comes from a 28-band exponential fit to the US Standard Atmosphere
+1976 / CIRA-72 and is identically zero above 2000 km. Earth centre only.
+
+### 2.6 Earth radiation pressure
+
+Reflected sunlight and thermal infrared, both arriving along the zenith
+direction and both driving the same flat-plate law as sunlight:
+
+```
+E_ir  = M_ir (Re/r)^2                                      exact, M_ir = 240 W/m^2
+E_alb = a S (Re/r)^2 [ w n(phi) + (1 - w) f(phi) ]         a = 0.30, w = (Re/r)^2
+        n(phi) = max(0, cos phi)                           near-field limit
+        f(phi) = (2/3pi)[sin phi + (pi - phi) cos phi]     Lambert-sphere limit
+```
+
+with `phi` the phase angle Sun–Earth–spacecraft. The infrared term does **not**
+vanish in eclipse; the albedo term does, geometrically. Derivations and
+accuracy in [`earth-model.md`](earth-model.md) §7.
+
+### 2.7 Planetary third bodies
+
+The same third-body expression as §2.2, summed over the configured planets.
+Only meaningful heliocentrically: from Earth orbit Jupiter's tidal
+acceleration is about 1e-13 of the central term. Positions come from
+Standish's approximate Keplerian elements — see
+[`interplanetary-model.md`](interplanetary-model.md) §2, including the
+equinox-of-date precession correction that the validation suite caught.
+
+### 2.8 Solar radiation pressure
 
 See [`solar-sail-model.md`](solar-sail-model.md) for the full derivation.
+
+---
+
+### 2.9 The heliocentric frame
+
+The integration centre is switchable between the Earth, the Moon and the Sun.
+Nothing in §2 changes when it is the Sun: `sunToCraft` becomes `r`, the SRP
+pressure law was always `1/r²`, and cone/clock angles were always Sun-relative.
+The terms that ARE Earth-specific — J2, J3, drag, albedo and infrared — are
+either refused outright or fall to zero geometrically.
+
+Out there the governing parameter is the lightness number
+
+```
+beta = a_c / (mu_sun / AU^2)
+```
+
+which is the same everywhere, because the sail acceleration and solar gravity
+both scale as `1/r²`. A Sun-facing sail reduces the effective gravitational
+parameter to `mu(1 - beta)`, so a spacecraft on a circular orbit escapes when
+`beta >= 0.5`. That threshold is checked directly by the validation suite; see
+[`interplanetary-model.md`](interplanetary-model.md) §4.
 
 ---
 
@@ -125,18 +204,32 @@ a given effect can be neglected:
 | Effect | LEO (500 km) | GEO |
 | --- | --- | --- |
 | Earth J2 | ~1e-3 | ~1e-5 |
+| Earth J3 | ~4e-6 | ~2e-9 |
+| Drag, 1 m²/kg sail broadside | ~1e-5 | 0 (above the model cutoff) |
+| Earth albedo + infrared | ~2e-7 | ~1e-9 |
 | Sail, 1 m²/kg | ~1e-6 | ~4e-5 |
 | Moon third body | ~1e-7 | ~2e-5 |
 | Sun third body | ~5e-8 | ~1e-5 |
 
-Two things follow, both of which the tool is built around:
+Three things follow, all of which the tool is built around:
 
 1. **In LEO the sail is a very small perturbation** — smaller than J2 by three
    orders of magnitude. Its effect is only visible after revolution averaging.
-2. **At GEO the sail becomes comparable to lunisolar gravity.** Tidal
-   acceleration grows as `r` while central gravity falls as `1/r²`, so the
-   third-body ratio grows as `r³` — a factor of 230 between LEO and GEO. That
-   is why the high-orbit scenarios enable lunar and solar gravity by default.
+2. **In LEO drag is larger than the sail**, by about an order of magnitude for
+   a broadside 1 m²/kg sail at 500 km, and it always opposes the motion. This
+   is why the LEO answer for a large sail is decay, not orbit raising, and why
+   drag is on by default for the Earth scenarios.
+3. **At GEO the sail becomes comparable to lunisolar gravity**, and drag and
+   Earth radiation vanish. Tidal acceleration grows as `r` while central
+   gravity falls as `1/r²`, so the third-body ratio grows as `r³` — a factor
+   of 230 between LEO and GEO. That is why the high-orbit scenarios enable
+   lunar and solar gravity and disable drag by default.
+
+The Earth-radiation row deserves a note: the *flux* it represents is ~40% of
+the direct solar flux at 500 km, not 20% of the sail term. The ratio above is
+small because that flux arrives along the local vertical, where it does very
+little work on the orbit, and because the albedo half reverses sense between
+the day and night halves of each revolution.
 
 ---
 
@@ -216,9 +309,18 @@ See [`lunar-model.md`](lunar-model.md).
 
 Listed explicitly so nothing has to be inferred from silence:
 
-- Atmospheric drag
-- Earth albedo and infrared radiation pressure
-- Gravity harmonics beyond J2 (J3, J22, and all higher terms)
+- Gravity harmonics beyond J3 (J22 and all higher terms)
+- Sphere-of-influence patching: the integration centre never changes mid-run
+- Departure hyperbolas, arrival B-planes, launch windows and porkchop plots
+- Solar thermal limits, coronal drag and sail degradation, which are what
+  actually decide whether a close solar pass is possible
+- Planetary occultation of the Sun; eclipse is Earth and Moon only
+- Thermospheric winds, the diurnal density bulge, and geomagnetic storms —
+  the atmosphere model is static, and the solar-activity selector is a blunt
+  multiplier rather than a density model
+- Aerodynamic lift on the sail, and variation of C_D with incidence angle
+- Wavelength dependence of the sail optical coefficients, which are
+  visible-band values applied unchanged to Earth thermal infrared
 - Lunar gravity harmonics (the Moon is a point mass here)
 - Solid-body and ocean tides
 - Relativistic corrections

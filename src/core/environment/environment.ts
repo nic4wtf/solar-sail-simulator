@@ -2,31 +2,80 @@
  * Environment: everything the force model needs to know about the universe at
  * a given mission time, expressed in the chosen inertial integration frame.
  *
- * The integration CENTRE is configurable ('earth' or 'moon'). All body
+ * The integration CENTRE is configurable: 'earth', 'moon' or 'sun'. All body
  * positions are returned relative to that centre, with axes parallel to J2000
- * equatorial. This is the seam that lets a heliocentric centre be added later
- * for interplanetary work (see docs/future-work.md) without touching the
- * gravity, SRP, attitude or integrator code.
+ * equatorial.
+ *
+ * That switch is the only structural thing interplanetary work needed. Adding
+ * the heliocentric centre changed this file and nothing in the gravity, SRP,
+ * attitude or integrator code: `sunToCraft` already returned the right vector
+ * (it becomes simply `r` when the Sun is at the origin), `pressureAt` already
+ * scaled as 1/r^2 with no assumption that r is near 1 AU, and the cone/clock
+ * attitude frame was always Sun-relative. See docs/interplanetary-model.md.
  */
 
-import { MU_EARTH, MU_MOON, MU_SUN, R_EARTH, R_MOON } from '../constants.ts';
-import { type Vec3, ZERO, neg, norm, sub } from '../vec3.ts';
+import { MU_EARTH, MU_MOON, MU_SUN, R_EARTH, R_MOON, R_SUN } from '../constants.ts';
+import { type Vec3, ZERO, add, neg, norm, sub } from '../vec3.ts';
 import { type MoonModel, moonState } from './moon.ts';
+import { type PlanetId, PLANET_FACTS, earthHeliocentric, planetState } from './planets.ts';
 import { sunState } from './sun.ts';
 import { missionTimeToJd } from './time.ts';
 
-export type CentralBody = 'earth' | 'moon';
+export type CentralBody = 'earth' | 'moon' | 'sun';
 
 export const CENTRAL_BODY_LABELS: Record<CentralBody, string> = {
   earth: 'Earth-centred inertial (ECI, J2000 equatorial axes)',
   moon: 'Moon-centred inertial (MCI, J2000 equatorial axes)',
+  sun: 'Heliocentric inertial (HCI, J2000 equatorial axes)',
+};
+
+/** Short frame name, for readouts where the full label will not fit. */
+export const CENTRAL_BODY_FRAME: Record<CentralBody, string> = {
+  earth: 'ECI',
+  moon: 'MCI',
+  sun: 'HCI',
+};
+
+export const CENTRAL_BODY_NAMES: Record<CentralBody, string> = {
+  earth: 'Earth',
+  moon: 'Moon',
+  sun: 'Sun',
+};
+
+/** Gravitational parameter of an integration centre [m^3/s^2]. */
+export const CENTRAL_MU: Record<CentralBody, number> = {
+  earth: MU_EARTH,
+  moon: MU_MOON,
+  sun: MU_SUN,
+};
+
+/**
+ * Reference radius of an integration centre [m].
+ *
+ * For the Sun this is the photospheric radius. "Altitude above the Sun" is not
+ * a quantity anyone uses, but it is what makes the minimum-altitude floor mean
+ * something for a close solar pass, and the UI reports heliocentric RADIUS in
+ * AU rather than altitude.
+ */
+export const CENTRAL_RADIUS: Record<CentralBody, number> = {
+  earth: R_EARTH,
+  moon: R_MOON,
+  sun: R_SUN,
 };
 
 export interface BodyState {
-  name: 'Earth' | 'Moon' | 'Sun';
+  /** Display name. Free text because the planet list is open-ended. */
+  name: string;
   /** Position relative to the integration centre [m]. */
   position: Vec3;
-  /** Velocity relative to the integration centre [m/s]. Sun velocity is not modelled. */
+  /**
+   * Velocity relative to the integration centre [m/s].
+   *
+   * Left at zero for a body whose motion the model does not need: the Sun in
+   * a planet-centred frame, and every perturbing planet (third-body gravity
+   * uses position only). It is populated for the Earth and the Moon, where
+   * the lunar-encounter analysis needs a relative velocity.
+   */
   velocity: Vec3;
   /** Gravitational parameter [m^3/s^2]. */
   mu: number;
@@ -50,6 +99,13 @@ export interface EnvironmentSnapshot {
   earth: BodyState;
   moon: BodyState;
   sun: BodyState;
+  /**
+   * Perturbing planets, in the order requested by the configuration.
+   *
+   * Empty unless the configuration asks for them. Each one costs a Kepler
+   * solve per acceleration evaluation, so they are not computed speculatively.
+   */
+  planets: BodyState[];
   /** Earth -> Moon vector [m], independent of the integration centre. */
   earthToMoon: Vec3;
 }
@@ -61,6 +117,14 @@ export interface EnvironmentConfig {
   centre: CentralBody;
   /** Lunar ephemeris fidelity. */
   moonModel: MoonModel;
+  /**
+   * Planets to include as perturbing third bodies.
+   *
+   * The Earth is never listed here - it is always present as `env.earth`,
+   * from the solar series rather than the planetary table, so that the same
+   * Earth is used in every frame. See planets.ts.
+   */
+  planets?: PlanetId[];
 }
 
 /**
@@ -89,23 +153,57 @@ export function evaluateEnvironment(cfg: EnvironmentConfig, t: number): Environm
     moonPos = moon.position;
     moonVel = moon.velocity;
     sunPos = sun.position;
-  } else {
+  } else if (cfg.centre === 'moon') {
     // Moon-centred: shift everything by -r_EarthMoon.
     earthPos = neg(moon.position);
     earthVel = neg(moon.velocity);
     moonPos = ZERO;
     moonVel = ZERO;
     sunPos = sub(sun.position, moon.position);
+  } else {
+    // Heliocentric. The Earth comes from the SAME solar series used by every
+    // geocentric calculation, negated - not from the planetary table - so the
+    // Earth does not move when the integration centre is switched.
+    const earth = earthHeliocentric(jd);
+    earthPos = earth.position;
+    earthVel = earth.velocity;
+    moonPos = add(earth.position, moon.position);
+    moonVel = add(earth.velocity, moon.velocity);
+    sunPos = ZERO;
   }
 
   const isEarthCentre = cfg.centre === 'earth';
+  const isSunCentre = cfg.centre === 'sun';
+
+  // Perturbing planets. Positions are heliocentric from the table, then
+  // shifted into whatever frame is in force.
+  const planets: BodyState[] = [];
+  const wanted = cfg.planets;
+  if (wanted && wanted.length > 0) {
+    // Offset from the Sun to the integration centre, so a heliocentric planet
+    // position can be expressed in the current frame.
+    const centreFromSun: Vec3 = isSunCentre ? ZERO : neg(sunPos);
+    for (const id of wanted) {
+      if (id === 'earth') continue; // always present as env.earth
+      const st = planetState(id, jd);
+      const facts = PLANET_FACTS[id];
+      planets.push({
+        name: facts.name,
+        position: sub(st.position, centreFromSun),
+        velocity: st.velocity,
+        mu: facts.mu,
+        radius: facts.radius,
+        isCentral: false,
+      });
+    }
+  }
 
   return {
     t,
     jd,
     centre: cfg.centre,
-    muCentral: isEarthCentre ? MU_EARTH : MU_MOON,
-    radiusCentral: isEarthCentre ? R_EARTH : R_MOON,
+    muCentral: CENTRAL_MU[cfg.centre],
+    radiusCentral: CENTRAL_RADIUS[cfg.centre],
     earth: {
       name: 'Earth',
       position: earthPos,
@@ -120,16 +218,17 @@ export function evaluateEnvironment(cfg: EnvironmentConfig, t: number): Environm
       velocity: moonVel,
       mu: MU_MOON,
       radius: R_MOON,
-      isCentral: !isEarthCentre,
+      isCentral: cfg.centre === 'moon',
     },
     sun: {
       name: 'Sun',
       position: sunPos,
       velocity: ZERO,
       mu: MU_SUN,
-      radius: 6.957e8,
-      isCentral: false,
+      radius: R_SUN,
+      isCentral: isSunCentre,
     },
+    planets,
     earthToMoon,
   };
 }

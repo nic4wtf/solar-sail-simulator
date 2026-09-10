@@ -12,19 +12,20 @@
  */
 
 import { useMemo, useState } from 'react';
-import { RAD, SEC_PER_DAY } from '../../core/constants.ts';
+import { AU, RAD, SEC_PER_DAY } from '../../core/constants.ts';
 import { meanElementSeries } from '../../sim/analysis.ts';
 import type { TrajectorySample } from '../../sim/types.ts';
 import { selectPalette, useStore } from '../../state/store.ts';
 import { Plot, cursorShape, usePlotColors } from '../viz/Plot.tsx';
 import { EmptyState } from '../widgets/Controls.tsx';
 
-type ChartGroup = 'elements' | 'mission' | 'sail' | 'state' | 'geometry';
+type ChartGroup = 'elements' | 'mission' | 'sail' | 'perturbations' | 'state' | 'geometry';
 
 const GROUP_LABELS: Record<ChartGroup, string> = {
   elements: 'Orbital elements',
   mission: 'Altitude and energy',
   sail: 'Sail',
+  perturbations: 'Drag and Earth radiation',
   state: 'Position and velocity',
   geometry: 'Geometry',
 };
@@ -41,6 +42,17 @@ export function Charts() {
   const palette = useStore(selectPalette);
 
   const samples = result?.samples;
+
+  /**
+   * Length unit for the distance axes.
+   *
+   * Kilometres are unreadable heliocentrically - a Mars transfer plots as
+   * "2.3e8" and nobody recognises that as Mars - so the distance axes switch
+   * to AU with the integration centre, exactly as the readouts do.
+   */
+  const heliocentric = result?.config.centralBody === 'sun';
+  const lenDiv = heliocentric ? AU : 1000;
+  const lenUnit = heliocentric ? 'AU' : 'km';
 
   const mean = useMemo(() => (samples ? meanElementSeries(samples) : null), [samples]);
 
@@ -138,7 +150,7 @@ export function Charts() {
       case 'elements':
         return [
           elementTrace(
-            samples.map((s) => s.sma / 1000),
+            samples.map((s) => s.sma / lenDiv),
             'Semi-major axis, osculating',
             OSC_COLORS[0],
             { yaxis: 'y' },
@@ -146,7 +158,7 @@ export function Charts() {
           ...(mean?.valid
             ? [
                 meanLine(
-                  mean.sma.map((x) => x / 1000),
+                  mean.sma.map((x) => x / lenDiv),
                   'Semi-major axis, mean',
                   PLOT_COLORS[0],
                   { yaxis: 'y' },
@@ -178,23 +190,25 @@ export function Charts() {
                 ),
               ]
             : []),
-          ...comparisonTraces((s) => s.sma / 1000),
+          ...comparisonTraces((s) => s.sma / lenDiv),
         ];
 
       case 'mission':
         return [
           line(
-            samples.map((s) => s.altitude / 1000),
-            'Altitude',
+            // "Altitude above the solar photosphere" is not a quantity anyone
+            // wants; heliocentrically the useful trace is the radius itself.
+            samples.map((s) => (heliocentric ? s.radius : s.altitude) / lenDiv),
+            heliocentric ? 'Solar distance' : 'Altitude',
             PLOT_COLORS[0],
           ),
           line(
-            samples.map((s) => s.periapsis / 1000),
+            samples.map((s) => s.periapsis / lenDiv),
             'Periapsis radius',
             PLOT_COLORS[1],
           ),
           line(
-            samples.map((s) => (Number.isFinite(s.apoapsis) ? s.apoapsis / 1000 : null)),
+            samples.map((s) => (Number.isFinite(s.apoapsis) ? s.apoapsis / lenDiv : null)),
             'Apoapsis radius',
             PLOT_COLORS[2],
           ),
@@ -204,7 +218,7 @@ export function Charts() {
             PLOT_COLORS[3],
             { yaxis: 'y2' },
           ),
-          ...comparisonTraces((s) => s.altitude / 1000),
+          ...comparisonTraces((s) => (heliocentric ? s.radius : s.altitude) / lenDiv),
         ];
 
       case 'sail':
@@ -249,6 +263,59 @@ export function Charts() {
           ),
         ];
 
+      /**
+       * The sail against everything else acting on it.
+       *
+       * Plotted on ONE acceleration axis on purpose. The comparison is the
+       * whole content of the chart: in a low orbit the drag trace sits above
+       * the sail trace and the argument is over, and no amount of steering
+       * detail changes that. The two impulse integrals below say the same
+       * thing cumulatively, which is the form that survives a trace that
+       * spikes twice a revolution.
+       */
+      case 'perturbations':
+        return [
+          line(
+            samples.map((s) => s.sailAccel * 1e6),
+            'Sail acceleration',
+            PLOT_COLORS[0],
+          ),
+          line(
+            samples.map((s) => s.dragAccel * 1e6),
+            'Drag deceleration',
+            PLOT_COLORS[3],
+          ),
+          line(
+            samples.map((s) => s.earthRadiationAccel * 1e6),
+            'Earth albedo + infrared',
+            PLOT_COLORS[4],
+          ),
+          line(
+            samples.map((s) => s.airDensity),
+            'Air density [kg/m^3]',
+            PLOT_COLORS[5],
+            { yaxis: 'y2' },
+          ),
+          line(
+            samples.map((s) => s.dragArea),
+            'Drag area [m^2]',
+            PLOT_COLORS[2],
+            { yaxis: 'y3', visible: 'legendonly' },
+          ),
+          line(
+            samples.map((s) => s.deltaVEquivalent),
+            'Sail impulse [m/s]',
+            PLOT_COLORS[0],
+            { yaxis: 'y4', line: { color: PLOT_COLORS[0], width: 2.2, dash: 'dot' } },
+          ),
+          line(
+            samples.map((s) => s.dragDeltaVEquivalent),
+            'Drag impulse [m/s]',
+            PLOT_COLORS[3],
+            { yaxis: 'y4', line: { color: PLOT_COLORS[3], width: 2.2, dash: 'dot' } },
+          ),
+        ];
+
       case 'state':
         return [
           line(samples.map((s) => s.x / 1000), 'X', PLOT_COLORS[0]),
@@ -272,12 +339,12 @@ export function Charts() {
       case 'geometry':
         return [
           line(
-            samples.map((s) => s.moonDistance / 1000),
+            samples.map((s) => s.moonDistance / lenDiv),
             'Distance to the Moon',
             PLOT_COLORS[0],
           ),
           line(
-            samples.map((s) => s.earthDistance / 1000),
+            samples.map((s) => s.earthDistance / lenDiv),
             'Distance to the Earth',
             PLOT_COLORS[1],
           ),
@@ -307,7 +374,7 @@ export function Charts() {
           ),
         ];
     }
-  }, [samples, t, tMean, mean, group, comparisons, PLOT_COLORS, OSC_COLORS]);
+  }, [samples, t, tMean, mean, group, comparisons, PLOT_COLORS, OSC_COLORS, heliocentric, lenDiv]);
 
   const layout = useMemo(() => {
     // Multi-axis layouts. Each extra y axis is given its own slice of the
@@ -317,7 +384,7 @@ export function Charts() {
         return {
           shapes,
           xaxis: { ...xaxis, domain: [0, 0.8] },
-          yaxis: { title: { text: 'sma [km]' } },
+          yaxis: { title: { text: `sma [${lenUnit}]` } },
           yaxis2: {
             title: { text: 'ecc' },
             overlaying: 'y',
@@ -338,7 +405,7 @@ export function Charts() {
         return {
           shapes,
           xaxis,
-          yaxis: { title: { text: 'distance [km]' } },
+          yaxis: { title: { text: `distance [${lenUnit}]` } },
           yaxis2: {
             title: { text: 'energy [kJ/kg]' },
             overlaying: 'y',
@@ -377,6 +444,36 @@ export function Charts() {
           },
           margin: { l: 66, r: 128, t: 26, b: 44 },
         };
+      case 'perturbations':
+        return {
+          shapes,
+          xaxis: { ...xaxis, domain: [0, 0.78] },
+          yaxis: { title: { text: 'accel [um/s^2]' } },
+          yaxis2: {
+            title: { text: 'density [kg/m^3]' },
+            type: 'log',
+            overlaying: 'y',
+            side: 'right',
+            showgrid: false,
+          },
+          yaxis3: {
+            title: { text: 'area [m^2]' },
+            overlaying: 'y',
+            side: 'right',
+            position: 0.88,
+            anchor: 'free',
+            showgrid: false,
+          },
+          yaxis4: {
+            title: { text: 'impulse [m/s]' },
+            overlaying: 'y',
+            side: 'right',
+            position: 0.97,
+            anchor: 'free',
+            showgrid: false,
+          },
+          margin: { l: 66, r: 132, t: 26, b: 44 },
+        };
       case 'state':
         return {
           shapes,
@@ -412,7 +509,7 @@ export function Charts() {
           margin: { l: 74, r: 112, t: 26, b: 44 },
         };
     }
-  }, [group, shapes, xaxis]);
+  }, [group, shapes, xaxis, lenUnit]);
 
   if (collapsed) {
     return (

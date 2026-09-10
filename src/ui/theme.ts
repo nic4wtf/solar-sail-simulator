@@ -55,6 +55,17 @@ export interface ThemePalette {
   moonSurface: number;
   moonOrbitLine: number;
 
+  // --- Heliocentric scene ---
+  /** The solar disc itself. Unlit, because it is the light source. */
+  sunSurface: number;
+  /** Corona shell drawn just outside the disc. */
+  sunGlow: number;
+  sunGlowOpacity: number;
+  /** Perturbing planet spheres, all one colour: they are markers, not portraits. */
+  planetSurface: number;
+  /** Planetary orbit reference rings. */
+  planetOrbitLine: number;
+
   trailColor: number;
   futureColor: number;
   futureOpacity: number;
@@ -65,6 +76,8 @@ export interface ThemePalette {
   /** Body marker ring + label, as a CSS colour (drawn on a 2D canvas). */
   earthMarker: string;
   moonMarker: string;
+  sunMarker: string;
+  planetMarker: string;
 
   // --- Semantic vectors, as numeric hex (3D) and CSS strings (2D) ---
   vecSun: number;
@@ -118,6 +131,12 @@ const DARK: ThemePalette = {
   moonSurface: 0xa9a49a,
   moonOrbitLine: 0x4a4a52,
 
+  sunSurface: 0xffd66b,
+  sunGlow: 0xffb347,
+  sunGlowOpacity: 0.22,
+  planetSurface: 0xb98f6a,
+  planetOrbitLine: 0x3b4358,
+
   trailColor: 0x4da3ff,
   futureColor: 0x35507a,
   futureOpacity: 0.55,
@@ -127,6 +146,8 @@ const DARK: ThemePalette = {
 
   earthMarker: '#7fb6ee',
   moonMarker: '#d8d3c6',
+  sunMarker: '#ffd479',
+  planetMarker: '#d7a878',
 
   vecSun: 0xffd479,
   vecNormal: 0x7ee081,
@@ -202,6 +223,14 @@ const LIGHT: ThemePalette = {
   moonSurface: 0x9c968b,
   moonOrbitLine: 0xa8adb8,
 
+  // The Sun keeps a saturated fill in light mode: a pale disc on a pale sky
+  // reads as a hole rather than as a star.
+  sunSurface: 0xf5a623,
+  sunGlow: 0xf5a623,
+  sunGlowOpacity: 0.16,
+  planetSurface: 0x9c6f47,
+  planetOrbitLine: 0xb9bfcb,
+
   trailColor: 0x1565c0,
   // The not-yet-travelled path overlaps itself heavily - a 7-day LEO run is
   // ~106 revolutions whose planes precess under J2 - so on a light background
@@ -216,6 +245,8 @@ const LIGHT: ThemePalette = {
 
   earthMarker: '#1a5c9e',
   moonMarker: '#6d675d',
+  sunMarker: '#b26a00',
+  planetMarker: '#7a4f28',
 
   vecSun: 0xc98a00,
   vecNormal: 0x1f8f3c,
