@@ -18,7 +18,11 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "exactOptionalPropertyTypes": false,
-    "types": ["vitest/globals"]
+    // "node" is required by src/test, which reads styles.css from disk to
+    // check that the CSS and TypeScript palettes agree. An explicit `types`
+    // array excludes every other @types package, so Node's built-in modules
+    // are unavailable unless named here.
+    "types": ["vitest/globals", "node"]
   },
   "include": ["src"]
 }

@@ -8,11 +8,11 @@
   "scripts": {
     "dev": "vite",
     "start": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b --force && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --force --noEmit"
   },
   "dependencies": {
     "plotly.js-basic-dist-min": "^3.0.1",
