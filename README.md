@@ -20,9 +20,12 @@ clear why the answer is **not** `pressure × area / mass`.
 
 ### Option A — use the deployed version
 
-Open the GitHub Pages URL for this repository. The app loads with a working
-500 km LEO simulation already running; press **Run** to re-propagate after any
-change.
+**https://nic4wtf.github.io/solar-sail-simulator/**
+
+The app loads with a working 500 km LEO simulation already running; press
+**Run** to re-propagate after any change. Nothing to install, and no data
+leaves your browser — the propagator, the analysis and the CSV export all run
+client-side.
 
 ### Option B — run locally
 
@@ -51,13 +54,16 @@ Requires Node 20 or newer.
 
 ## Deploying to GitHub Pages
 
-The repository ships a workflow that does this automatically.
+Already live at **https://nic4wtf.github.io/solar-sail-simulator/**, published
+by `.github/workflows/deploy.yml` on every push to `main`. The workflow
+typechecks, runs all 173 tests, builds, and only then publishes — so a broken
+commit cannot reach the live site.
+
+To set this up on a fork:
 
 1. Push to `main`.
-2. In the repository, go to **Settings → Pages → Build and deployment** and set
-   **Source** to **GitHub Actions**.
-3. Done. `.github/workflows/deploy.yml` typechecks, tests, builds and publishes
-   on every push to `main`.
+2. **Settings → Pages → Build and deployment → Source: GitHub Actions.**
+3. Done.
 
 No secrets or tokens are needed. Vite is configured with `base: './'`, so the
 bundle works from any sub-path — you do not need to hard-code the repository
