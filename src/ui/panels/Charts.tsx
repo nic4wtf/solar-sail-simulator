@@ -15,8 +15,8 @@ import { useMemo, useState } from 'react';
 import { RAD, SEC_PER_DAY } from '../../core/constants.ts';
 import { meanElementSeries } from '../../sim/analysis.ts';
 import type { TrajectorySample } from '../../sim/types.ts';
-import { useStore } from '../../state/store.ts';
-import { PLOT_COLORS, Plot, cursorShape } from '../viz/Plot.tsx';
+import { selectPalette, useStore } from '../../state/store.ts';
+import { Plot, cursorShape, usePlotColors } from '../viz/Plot.tsx';
 import { EmptyState } from '../widgets/Controls.tsx';
 
 type ChartGroup = 'elements' | 'mission' | 'sail' | 'state' | 'geometry';
@@ -35,6 +35,10 @@ export function Charts() {
   const comparisons = useStore((s) => s.comparisons);
   const [group, setGroup] = useState<ChartGroup>('elements');
   const [collapsed, setCollapsed] = useState(false);
+  // Trace colours must follow the theme: dark-mode hues are unreadable on a
+  // light background.
+  const { traces: PLOT_COLORS, osculating: OSC_COLORS } = usePlotColors();
+  const palette = useStore(selectPalette);
 
   const samples = result?.samples;
 
@@ -54,7 +58,10 @@ export function Charts() {
     ? samples[Math.min(cursor, samples.length - 1)].t / SEC_PER_DAY
     : 0;
 
-  const shapes = [cursorShape(cursorT)];
+  const shapes = useMemo(
+    () => [cursorShape(cursorT, palette.plotCursor)],
+    [cursorT, palette.plotCursor],
+  );
   const xaxis = { title: { text: 'Mission elapsed time [days]' } };
 
   const data = useMemo(() => {
@@ -133,7 +140,7 @@ export function Charts() {
           elementTrace(
             samples.map((s) => s.sma / 1000),
             'Semi-major axis, osculating',
-            '#2f6499',
+            OSC_COLORS[0],
             { yaxis: 'y' },
           ),
           ...(mean?.valid
@@ -149,7 +156,7 @@ export function Charts() {
           elementTrace(
             samples.map((s) => s.ecc),
             'Eccentricity, osculating',
-            '#a06b1f',
+            OSC_COLORS[1],
             { yaxis: 'y2' },
           ),
           ...(mean?.valid
@@ -158,7 +165,7 @@ export function Charts() {
           elementTrace(
             samples.map((s) => s.inc * RAD),
             'Inclination, osculating',
-            '#4a8a4d',
+            OSC_COLORS[2],
             { yaxis: 'y3' },
           ),
           ...(mean?.valid
@@ -300,7 +307,7 @@ export function Charts() {
           ),
         ];
     }
-  }, [samples, t, tMean, mean, group, comparisons]);
+  }, [samples, t, tMean, mean, group, comparisons, PLOT_COLORS, OSC_COLORS]);
 
   const layout = useMemo(() => {
     // Multi-axis layouts. Each extra y axis is given its own slice of the

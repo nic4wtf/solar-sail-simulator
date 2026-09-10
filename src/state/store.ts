@@ -18,6 +18,16 @@ import { runSweep } from '../sim/sensitivity.ts';
 import { buildScenario, defaultConfig } from '../sim/scenarios.ts';
 import { PRESETS_BY_ID } from '../sim/presets.ts';
 import { clearExpressionCache } from '../core/attitude/rules.ts';
+import {
+  type ResolvedTheme,
+  type ThemeChoice,
+  PALETTES,
+  type ThemePalette,
+  applyTheme,
+  loadThemeChoice,
+  resolveTheme,
+  saveThemeChoice,
+} from '../ui/theme.ts';
 
 export type RunState = 'idle' | 'propagating' | 'ready' | 'playing';
 
@@ -63,6 +73,12 @@ interface AppState {
   /** Whether the trajectory trail shows the whole run or only the past. */
   showFullTrajectory: boolean;
 
+  // --- Theme -----------------------------------------------------------
+  /** The user's preference, which may be 'system'. */
+  themeChoice: ThemeChoice;
+  /** The concrete theme in force, after resolving 'system'. */
+  theme: ResolvedTheme;
+
   // --- View ------------------------------------------------------------
   viewMode: ViewMode;
   cameraTarget: CameraTarget;
@@ -95,6 +111,10 @@ interface AppState {
   stepCursor: (delta: number) => void;
   setPlaybackSpeed: (speed: number) => void;
 
+  setThemeChoice: (choice: ThemeChoice) => void;
+  /** Re-resolve 'system' after an OS colour-scheme change. */
+  syncSystemTheme: () => void;
+
   setViewMode: (mode: ViewMode) => void;
   setCameraTarget: (target: CameraTarget) => void;
   setActiveTab: (tab: PanelTab) => void;
@@ -118,6 +138,12 @@ let cancelRequested = false;
 let sweepCancelRequested = false;
 let comparisonCounter = 0;
 
+const initialThemeChoice = loadThemeChoice();
+const initialTheme = resolveTheme(initialThemeChoice);
+// Stamp at module load, before React's first paint, so the page never flashes
+// the wrong theme.
+if (typeof document !== 'undefined') applyTheme(initialTheme);
+
 export const useStore = create<AppState>((set, get) => ({
   config: defaultConfig(),
   dirty: true,
@@ -130,6 +156,9 @@ export const useStore = create<AppState>((set, get) => ({
   cursor: 0,
   playbackSpeed: 1,
   showFullTrajectory: true,
+
+  themeChoice: initialThemeChoice,
+  theme: initialTheme,
 
   viewMode: '3d',
   cameraTarget: 'earth',
@@ -267,6 +296,22 @@ export const useStore = create<AppState>((set, get) => ({
   setPlaybackSpeed: (speed) => set({ playbackSpeed: speed }),
 
   // -------------------------------------------------------------------
+  setThemeChoice: (choice) => {
+    const theme = resolveTheme(choice);
+    saveThemeChoice(choice);
+    applyTheme(theme);
+    set({ themeChoice: choice, theme });
+  },
+
+  syncSystemTheme: () => {
+    // Only meaningful while the user's choice is 'system'.
+    if (get().themeChoice !== 'system') return;
+    const theme = resolveTheme('system');
+    if (theme === get().theme) return;
+    applyTheme(theme);
+    set({ theme });
+  },
+
   setViewMode: (mode) => set({ viewMode: mode }),
   setCameraTarget: (target) => set({ cameraTarget: target }),
   setActiveTab: (tab) => set({ activeTab: tab }),
@@ -328,3 +373,12 @@ export const selectCurrentSample = (s: AppState) =>
     : null;
 
 export const selectSampleCount = (s: AppState) => s.result?.samples.length ?? 0;
+
+/**
+ * The active colour palette.
+ *
+ * The 3D view, the 2D canvas and the Plotly charts all read their colours
+ * from here rather than from CSS, because none of them can resolve CSS custom
+ * properties.
+ */
+export const selectPalette = (s: AppState): ThemePalette => PALETTES[s.theme];

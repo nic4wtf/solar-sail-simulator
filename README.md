@@ -41,7 +41,7 @@ services to start.
 | `npm start` | Alias for `npm run dev` |
 | `npm run build` | Typecheck and produce a static bundle in `dist/` |
 | `npm run preview` | Serve the built bundle locally |
-| `npm test` | Run the validation suite (131 tests) |
+| `npm test` | Run the validation suite (173 tests) |
 | `npm run test:watch` | Validation suite in watch mode |
 | `npm run typecheck` | TypeScript only, no emit |
 
@@ -89,6 +89,28 @@ nothing a server would usefully do.
 │              │   sail / state / geometry)      │                  │
 └──────────────┴─────────────────────────────────┴───────────────────┘
 ```
+
+### Themes
+
+Light, dark, and **system** (follows the OS preference live, not just at load).
+The choice persists in `localStorage`.
+
+Theming is not just CSS: the 3D view, the 2D canvas and the Plotly charts each
+take colours in a form that cannot read CSS custom properties, so the palette
+lives once in [`src/ui/theme.ts`](src/ui/theme.ts) and `styles.css` mirrors only
+the chrome tokens. A test asserts the two halves define the same tokens, that
+the light theme overrides every dark colour, and that every text/background
+pairing meets WCAG AA.
+
+The light palette is not a mechanical inversion. Three things had to change in
+kind rather than in lightness: the **starfield is hidden** (pale dots on a pale
+sky read as rendering dirt), the **ambient light is roughly doubled** (or the
+night side of a body becomes a black hole), and the **not-yet-travelled path is
+paled and made more transparent** (a 7-day LEO run is ~106 overlapping
+revolutions, which accumulate into a solid band on a light background).
+
+Switching themes recolours the live 3D scene in place rather than rebuilding
+it, so the camera position and the running playback are preserved.
 
 ### Execution model
 
@@ -287,7 +309,7 @@ wrong. It remains toggleable so the cost can be measured.
 
 ## Validation
 
-`npm test` runs 131 tests across five suites. Highlights:
+`npm test` runs 173 tests across six suites. Highlights:
 
 - **Two-body conservation** — a circular orbit stays circular; energy and
   angular momentum hold to 2.4e-8 relative over 7 days (0.16 m of semi-major
@@ -310,6 +332,9 @@ wrong. It remains toggleable so the cost can be measured.
 - **Every scenario and preset** propagates without numerical failure, and the
   lunar transfer is verified to enter the lunar sphere of influence and to be
   measurably shifted by the sail.
+- **Theming** — CSS/JS token parity, WCAG AA contrast for every text and
+  notice pairing in both themes, and that the craft marker and trail stay
+  legible against each scene background.
 
 Bugs this suite caught during development, all now fixed: a left-handed VNB
 triad, a sign error in the lunar latitude series (5.82° instead of the physical

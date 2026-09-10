@@ -1,6 +1,6 @@
 # Validation and error budget
 
-`npm test` runs **131 tests** across five suites. This document records what
+`npm test` runs **173 tests** across six suites. This document records what
 they check, the measured numbers, and the resulting error budget.
 
 | Suite | Tests | Covers |
@@ -10,6 +10,7 @@ they check, the measured numbers, and the resulting error budget.
 | [`attitude.test.ts`](../src/test/attitude.test.ts) | 33 | Reference frames, steering laws, schedule interpolation, expression parser |
 | [`environment.test.ts`](../src/test/environment.test.ts) | 28 | Time conversions, solar and lunar ephemerides, gravity term magnitudes |
 | [`scenarios.test.ts`](../src/test/scenarios.test.ts) | 36 | Every scenario and preset, orbit-raising behaviour, lunar transfer, export, sweeps |
+| [`theme.test.ts`](../src/test/theme.test.ts) | 42 | CSS/JS palette parity, WCAG contrast in both themes, renderer palette validity |
 
 ---
 
@@ -414,7 +415,43 @@ every coefficient rather than burying them.
 
 ---
 
-## 12. Reproducing these numbers
+## 12. Theming
+
+The palette is necessarily defined twice - as CSS custom properties for the
+chrome, and as a TypeScript object for the three renderers that cannot read CSS
+(WebGL, canvas 2D, Plotly). These tests stop the halves drifting apart.
+
+| Check | Result |
+| --- | --- |
+| Both themes define every shared chrome token | OK |
+| The light theme overrides every colour the dark theme defines | OK |
+| No token is accidentally identical in both themes | OK |
+| Primary and secondary text meet WCAG AA on the panel surface | OK, both themes |
+| On-accent text is legible on the accent fill | OK, both themes |
+| Every notice text colour is legible on its own tint | OK |
+| Semantic vector colours are distinguishable from the panel | OK |
+| Both renderer palettes define the same keys | OK |
+| Every numeric colour is a valid 24-bit value | OK |
+| Chart traces are legible against the panel surface | OK, both themes |
+| Craft marker contrasts with the scene background (> 4:1) | OK |
+| Trajectory trail contrasts with the scene background (> 2.5:1) | OK |
+
+Rendered brightness was also measured end-to-end in a real browser, from a
+screenshot of the 3D viewport:
+
+| Theme | Mean viewport brightness |
+| --- | --- |
+| Light | 201.6 / 255 |
+| Dark | 30.1 / 255 |
+
+> Measuring this took a detour worth recording. The obvious approach - calling
+> `gl.readPixels` on the WebGL canvas - returns **all zeros**, because Three.js
+> creates its context with `preserveDrawingBuffer: false` and the buffer is
+> gone by the time a test can read it. That silently made a "is the scene
+> dark?" assertion pass for *both* themes while failing the light one. The
+> check now decodes an actual screenshot instead.
+
+## 13. Reproducing these numbers
 
 ```bash
 npm test                              # all 131 tests

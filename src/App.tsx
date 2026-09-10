@@ -22,6 +22,7 @@ import { ResultsPanel } from './ui/panels/ResultsPanel.tsx';
 import { SensitivityPanel } from './ui/panels/SensitivityPanel.tsx';
 import { DocsPanel } from './ui/panels/DocsPanel.tsx';
 import { Notice } from './ui/widgets/Controls.tsx';
+import { THEME_CHOICE_LABELS, type ThemeChoice } from './ui/theme.ts';
 
 const LEFT_TABS: Array<{ id: PanelTab; label: string }> = [
   { id: 'mission', label: 'Mission' },
@@ -43,6 +44,7 @@ export default function App() {
   const run = useStore((s) => s.run);
   const result = useStore((s) => s.result);
   const runState = useStore((s) => s.runState);
+  const syncSystemTheme = useStore((s) => s.syncSystemTheme);
 
   // Auto-run once on mount, so the application opens on a working simulation.
   useEffect(() => {
@@ -50,6 +52,17 @@ export default function App() {
     // Intentionally mount-only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Follow the OS colour-scheme while the user's choice is "system". The
+  // store ignores the call for any other choice, so the listener can stay
+  // attached unconditionally.
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => syncSystemTheme();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [syncSystemTheme]);
 
   const leftTab = LEFT_TABS.some((t) => t.id === activeTab) ? activeTab : 'mission';
   const rightTab = RIGHT_TABS.some((t) => t.id === activeTab) ? activeTab : 'results';
@@ -106,6 +119,47 @@ export default function App() {
   );
 }
 
+/**
+ * Light / dark / system selector.
+ *
+ * "System" is a first-class option rather than just an initial default, so a
+ * user who switches their OS theme during the day does not have to come back
+ * and change it here. The resolved theme is stamped onto <html> by the store.
+ */
+function ThemeToggle() {
+  const choice = useStore((s) => s.themeChoice);
+  const resolved = useStore((s) => s.theme);
+  const setThemeChoice = useStore((s) => s.setThemeChoice);
+
+  const glyph: Record<ThemeChoice, string> = {
+    light: '\u2600',
+    dark: '\u263D',
+    system: '\u25D0',
+  };
+
+  return (
+    <div className="seg" role="group" aria-label="Colour theme">
+      <span className="seg-label">Theme</span>
+      {(['light', 'dark', 'system'] as ThemeChoice[]).map((c) => (
+        <button
+          key={c}
+          className={choice === c ? 'active' : ''}
+          onClick={() => setThemeChoice(c)}
+          aria-pressed={choice === c}
+          title={
+            c === 'system'
+              ? `Follow the operating system (currently ${resolved})`
+              : `${THEME_CHOICE_LABELS[c]} theme`
+          }
+        >
+          <span aria-hidden="true">{glyph[c]}</span>
+          <span className="seg-btn-text"> {THEME_CHOICE_LABELS[c]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function TopBar() {
   const runState = useStore((s) => s.runState);
   const progress = useStore((s) => s.progress);
@@ -140,6 +194,8 @@ function TopBar() {
         </span>
 
         <div className="topbar-spacer" />
+
+        <ThemeToggle />
 
         <div className="run-controls">
           {propagating ? (

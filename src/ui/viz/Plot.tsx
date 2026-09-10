@@ -10,55 +10,72 @@
  * download size, which matters for a static GitHub Pages deployment.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as Plotly from 'plotly.js-basic-dist-min';
+import { selectPalette, useStore } from '../../state/store.ts';
+import type { ThemePalette } from '../theme.ts';
 
-/** Shared dark theme so every chart matches the application chrome. */
-export const PLOT_COLORS = [
-  '#4da3ff',
-  '#ffb347',
-  '#7ee081',
-  '#ff7a7a',
-  '#c39bff',
-  '#5fd6c8',
-  '#ff9ecd',
-  '#b9c34d',
-];
+/**
+ * Chart theming.
+ *
+ * Plotly takes colours in a layout object and cannot read CSS variables, so
+ * the palette comes from `theme.ts`. Both `paper_bgcolor` and `plot_bgcolor`
+ * stay fully transparent in both themes so the chart sits directly on the
+ * panel surface, whatever that surface currently is.
+ *
+ * `usePlotColors()` returns the categorical trace palette for the ACTIVE
+ * theme. Charts must call it rather than importing a fixed array, or their
+ * traces would keep dark-mode hues on a light background.
+ */
+export function usePlotColors(): { traces: string[]; osculating: string[] } {
+  const p = useStore(selectPalette);
+  return useMemo(
+    () => ({ traces: p.plotTraces, osculating: p.plotOsculating }),
+    [p],
+  );
+}
 
-const BASE_LAYOUT: Record<string, unknown> = {
-  paper_bgcolor: 'rgba(0,0,0,0)',
-  plot_bgcolor: 'rgba(0,0,0,0)',
-  font: {
-    color: '#aab4c8',
-    family: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
-    size: 10,
-  },
-  margin: { l: 62, r: 16, t: 26, b: 40 },
-  hovermode: 'x unified',
-  showlegend: true,
-  legend: {
-    orientation: 'h',
-    y: 1.14,
-    x: 0,
-    font: { size: 9.5 },
-    bgcolor: 'rgba(0,0,0,0)',
-  },
-  xaxis: {
-    gridcolor: '#1c2432',
-    zerolinecolor: '#2b3444',
-    linecolor: '#283040',
-    tickfont: { size: 9.5 },
-    title: { font: { size: 10 } },
-  },
-  yaxis: {
-    gridcolor: '#1c2432',
-    zerolinecolor: '#2b3444',
-    linecolor: '#283040',
-    tickfont: { size: 9.5 },
-    title: { font: { size: 10 } },
-  },
-  title: { font: { size: 11.5, color: '#e8edf7' }, x: 0.01, xanchor: 'left', y: 0.98 },
-};
+function baseLayout(p: ThemePalette): Record<string, unknown> {
+  return {
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
+    font: {
+      color: p.plotFont,
+      family: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace',
+      size: 10,
+    },
+    margin: { l: 62, r: 16, t: 26, b: 40 },
+    hovermode: 'x unified',
+    showlegend: true,
+    legend: {
+      orientation: 'h',
+      y: 1.14,
+      x: 0,
+      font: { size: 9.5 },
+      bgcolor: 'rgba(0,0,0,0)',
+    },
+    xaxis: {
+      gridcolor: p.plotGrid,
+      zerolinecolor: p.plotZeroLine,
+      linecolor: p.plotAxisLine,
+      tickfont: { size: 9.5 },
+      title: { font: { size: 10 } },
+    },
+    yaxis: {
+      gridcolor: p.plotGrid,
+      zerolinecolor: p.plotZeroLine,
+      linecolor: p.plotAxisLine,
+      tickfont: { size: 9.5 },
+      title: { font: { size: 10 } },
+    },
+    title: {
+      font: { size: 11.5, color: p.plotTitle },
+      x: 0.01,
+      xanchor: 'left',
+      y: 0.98,
+    },
+  };
+}
 
 const CONFIG: Record<string, unknown> = {
   displaylogo: false,
@@ -102,15 +119,17 @@ function mergeLayout(
 
 export function Plot({ data, layout = {}, height = 220, className }: PlotProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const palette = useStore(selectPalette);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const merged = mergeLayout(BASE_LAYOUT, { ...layout, height });
+    const merged = mergeLayout(baseLayout(palette), { ...layout, height });
     // `react` updates an existing plot in place and creates one if absent, so
-    // the same call handles both mount and update.
+    // the same call handles both mount and update - including a theme change,
+    // which arrives here as a new `palette` and redraws with new axis colours.
     void Plotly.react(el, data, merged, CONFIG);
-  }, [data, layout, height]);
+  }, [data, layout, height, palette]);
 
   useEffect(() => {
     const el = ref.current;
@@ -125,8 +144,11 @@ export function Plot({ data, layout = {}, height = 220, className }: PlotProps) 
 /**
  * Build a vertical marker line for the playback cursor, as a layout shape.
  * Charts share this so the cursor is consistent across all of them.
+ *
+ * The colour is passed in rather than fixed: a white cursor is invisible on a
+ * light background.
  */
-export function cursorShape(x: number): Record<string, unknown> {
+export function cursorShape(x: number, color = '#ffffff'): Record<string, unknown> {
   return {
     type: 'line',
     x0: x,
@@ -134,7 +156,7 @@ export function cursorShape(x: number): Record<string, unknown> {
     yref: 'paper',
     y0: 0,
     y1: 1,
-    line: { color: '#ffffff', width: 1, dash: 'dot' },
-    opacity: 0.5,
+    line: { color, width: 1, dash: 'dot' },
+    opacity: 0.55,
   };
 }

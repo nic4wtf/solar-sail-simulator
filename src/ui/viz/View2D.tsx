@@ -18,7 +18,8 @@ import { R_EARTH, R_MOON } from '../../core/constants.ts';
 import { type Vec3, cross, norm, unit } from '../../core/vec3.ts';
 import { moonPosition } from '../../core/environment/moon.ts';
 import { sunDirection } from '../../core/environment/sun.ts';
-import { useStore } from '../../state/store.ts';
+import { selectPalette, useStore } from '../../state/store.ts';
+import { PALETTES } from '../theme.ts';
 
 type Projection = 'xy' | 'xz' | 'yz' | 'orbit';
 
@@ -29,22 +30,30 @@ const PROJECTION_LABELS: Record<Projection, string> = {
   orbit: 'Initial orbit plane',
 };
 
-const COLORS = {
-  bg: '#05070c',
-  grid: '#141b28',
-  gridMajor: '#1e2838',
-  earth: '#2f6ba8',
-  earthEdge: '#5a9bd8',
-  moon: '#a9a49a',
-  trail: '#4da3ff',
-  future: '#35507a',
-  craft: '#ffffff',
-  sun: '#ffd479',
-  normal: '#7ee081',
-  velocity: '#6fc2ff',
-  accel: '#ff7a7a',
-  text: '#74809a',
-};
+/**
+ * Canvas 2D takes CSS colour strings and cannot resolve CSS custom
+ * properties, so the palette is read from the store rather than from
+ * styles.css. `theme.ts` is the single source both share.
+ */
+function canvasColors(theme: 'dark' | 'light') {
+  const p = PALETTES[theme];
+  return {
+    bg: p.canvasBackground,
+    grid: p.canvasGrid,
+    gridMajor: p.canvasGridMajor,
+    earth: p.canvasEarth,
+    earthEdge: p.canvasEarthEdge,
+    moon: p.canvasMoon,
+    trail: p.canvasTrail,
+    future: p.canvasFuture,
+    craft: p.canvasCraft,
+    text: p.canvasText,
+    sun: `#${p.vecSun.toString(16).padStart(6, '0')}`,
+    normal: `#${p.vecNormal.toString(16).padStart(6, '0')}`,
+    velocity: `#${p.vecVelocity.toString(16).padStart(6, '0')}`,
+    accel: `#${p.vecAccel.toString(16).padStart(6, '0')}`,
+  };
+}
 
 /** Orthonormal basis for the chosen projection: (horizontal, vertical). */
 function projectionBasis(
@@ -91,6 +100,8 @@ function formatKm(m: number): string {
 export function View2D() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [projection, setProjection] = useState<Projection>('orbit');
+  const palette = useStore(selectPalette);
+  const themeName = palette.name;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -111,6 +122,8 @@ export function View2D() {
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(parent);
+
+    const COLORS = canvasColors(themeName);
 
     const draw = () => {
       raf = requestAnimationFrame(draw);
@@ -194,10 +207,12 @@ export function View2D() {
       ctx.beginPath();
       ctx.arc(cx, cy, Math.max(2 * dpr, bodyPx), 0, Math.PI * 2);
       ctx.fillStyle = centre === 'earth' ? COLORS.earth : COLORS.moon;
-      ctx.globalAlpha = 0.75;
+      // A 0.75 alpha fill reads as a solid body against a dark sky but looks
+      // washed out on a light one, so light mode draws the body opaque.
+      ctx.globalAlpha = themeName === 'dark' ? 0.75 : 1;
       ctx.fill();
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = centre === 'earth' ? COLORS.earthEdge : '#cfcabe';
+      ctx.strokeStyle = centre === 'earth' ? COLORS.earthEdge : COLORS.text;
       ctx.lineWidth = 1.2 * dpr;
       ctx.stroke();
 
@@ -344,7 +359,7 @@ export function View2D() {
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [projection]);
+  }, [projection, themeName]);
 
   return (
     <>
@@ -368,5 +383,5 @@ export function View2D() {
   );
 }
 
-/** Exported for the legend component so colours stay in one place. */
-export const VECTOR_COLORS = COLORS;
+/** Exported for any consumer that needs the same canvas colours. */
+export { canvasColors };

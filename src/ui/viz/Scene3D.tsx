@@ -16,27 +16,37 @@ import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { R_EARTH, R_MOON } from '../../core/constants.ts';
-import { useStore } from '../../state/store.ts';
+import { selectPalette, useStore } from '../../state/store.ts';
+import { type ThemePalette, PALETTES } from '../theme.ts';
 import { moonPosition } from '../../core/environment/moon.ts';
 import { sunDirection } from '../../core/environment/sun.ts';
 
 /** Scene units per metre: 1 unit = 1000 km. */
 const S = 1e-6;
 
-const COLORS = {
-  sun: 0xffd479,
-  normal: 0x7ee081,
-  velocity: 0x6fc2ff,
-  accel: 0xff7a7a,
-  trail: 0x4da3ff,
-  future: 0x35507a,
-  earth: 0x2f6ba8,
-  earthLine: 0x4f8fd0,
-  moon: 0xa9a49a,
-  moonOrbit: 0x4a4a52,
-  craft: 0xffffff,
-  sail: 0x9fe8a3,
-};
+/**
+ * Materials and objects whose colour depends on the theme.
+ *
+ * Collected at build time so a theme change can be applied by mutating them in
+ * place. Rebuilding the scene instead would be simpler to write but would
+ * discard the user's camera position and zoom on every toggle, which is a
+ * poor trade for something as incidental as a colour change.
+ */
+interface ThemeTargets {
+  earthSurface: THREE.MeshPhongMaterial;
+  graticule: THREE.LineBasicMaterial;
+  equator: THREE.LineBasicMaterial;
+  atmosphere: THREE.MeshBasicMaterial;
+  moonSurface: THREE.MeshPhongMaterial;
+  moonOrbit: THREE.LineBasicMaterial;
+  stars: THREE.PointsMaterial;
+  trail: THREE.LineBasicMaterial;
+  future: THREE.LineBasicMaterial;
+  craft: THREE.MeshBasicMaterial;
+  sailPlane: THREE.MeshBasicMaterial;
+  ambient: THREE.AmbientLight;
+  sunLight: THREE.DirectionalLight;
+}
 
 /** Fixed on-screen length for the direction vectors, in scene units. */
 function vectorScale(radiusUnits: number): number {
@@ -75,7 +85,13 @@ interface SceneRefs {
 }
 
 /** Build the Earth: shaded sphere, graticule, and a thin atmosphere shell. */
-function buildEarth(): THREE.Group {
+function buildEarth(p: ThemePalette): {
+  group: THREE.Group;
+  surface: THREE.MeshPhongMaterial;
+  graticule: THREE.LineBasicMaterial;
+  equator: THREE.LineBasicMaterial;
+  atmosphere: THREE.MeshBasicMaterial;
+} {
   const g = new THREE.Group();
   const r = R_EARTH * S;
 
@@ -83,25 +99,22 @@ function buildEarth(): THREE.Group {
   // procedural shaded sphere plus a graticule keeps the build fully
   // self-contained (important for static GitHub Pages hosting) and reads more
   // like an engineering display than a photographic globe would.
-  const sphere = new THREE.Mesh(
-    new THREE.SphereGeometry(r, 64, 48),
-    new THREE.MeshPhongMaterial({
-      color: COLORS.earth,
-      shininess: 12,
-      specular: 0x1a2a3a,
-    }),
-  );
-  g.add(sphere);
+  const surface = new THREE.MeshPhongMaterial({
+    color: p.earthSurface,
+    shininess: 12,
+    specular: 0x1a2a3a,
+  });
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(r, 64, 48), surface));
 
   // Graticule: parallels every 30 deg, meridians every 30 deg.
   const grid = new THREE.Group();
   const mat = new THREE.LineBasicMaterial({
-    color: COLORS.earthLine,
+    color: p.earthGraticule,
     transparent: true,
     opacity: 0.34,
   });
   const equatorMat = new THREE.LineBasicMaterial({
-    color: 0x8fc4f5,
+    color: p.earthEquator,
     transparent: true,
     opacity: 0.6,
   });
@@ -136,33 +149,31 @@ function buildEarth(): THREE.Group {
   }
   g.add(grid);
 
-  // Atmosphere: additive back-face shell for a limb glow.
-  const atmo = new THREE.Mesh(
-    new THREE.SphereGeometry(r * 1.025, 48, 32),
-    new THREE.MeshBasicMaterial({
-      color: 0x4d9fe0,
-      transparent: true,
-      opacity: 0.09,
-      side: THREE.BackSide,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    }),
-  );
-  g.add(atmo);
+  // Atmosphere: a back-face shell for a limb glow. Additive blending only
+  // works against a dark sky - on a light background it washes the limb out
+  // to white - so light mode uses normal blending instead.
+  const atmosphere = new THREE.MeshBasicMaterial({
+    color: p.earthAtmosphere,
+    transparent: true,
+    opacity: p.earthAtmosphereOpacity,
+    side: THREE.BackSide,
+    blending: p.name === 'dark' ? THREE.AdditiveBlending : THREE.NormalBlending,
+    depthWrite: false,
+  });
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(r * 1.025, 48, 32), atmosphere));
 
-  return g;
+  return { group: g, surface, graticule: mat, equator: equatorMat, atmosphere };
 }
 
-function buildMoon(): THREE.Group {
+function buildMoon(p: ThemePalette): {
+  group: THREE.Group;
+  surface: THREE.MeshPhongMaterial;
+} {
   const g = new THREE.Group();
   const r = R_MOON * S;
-  g.add(
-    new THREE.Mesh(
-      new THREE.SphereGeometry(r, 40, 28),
-      new THREE.MeshPhongMaterial({ color: COLORS.moon, shininess: 3 }),
-    ),
-  );
-  return g;
+  const surface = new THREE.MeshPhongMaterial({ color: p.moonSurface, shininess: 3 });
+  g.add(new THREE.Mesh(new THREE.SphereGeometry(r, 40, 28), surface));
+  return { group: g, surface };
 }
 
 /**
@@ -235,6 +246,14 @@ function makeArrow(color: number, len: number): THREE.ArrowHelper {
 export function Scene3D() {
   const mountRef = useRef<HTMLDivElement>(null);
   const refs = useRef<SceneRefs | null>(null);
+  /**
+   * Set by the mount effect; called by the retheme effect.
+   *
+   * Held in a ref rather than in `SceneRefs` so the retheme effect does not
+   * need the scene to have finished building before it can be declared.
+   */
+  const applyPaletteRef = useRef<((p: ThemePalette) => void) | null>(null);
+  const palette = useStore(selectPalette);
 
   const result = useStore((s) => s.result);
   const cameraTarget = useStore((s) => s.cameraTarget);
@@ -263,9 +282,14 @@ export function Scene3D() {
     const mount = mountRef.current;
     if (!mount) return;
 
+    // The palette is read once here for construction. Later changes are
+    // applied by the retheme effect below, which mutates the collected
+    // materials rather than rebuilding the scene.
+    const p0 = PALETTES[useStore.getState().theme];
+
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setClearColor(0x05070c, 1);
+    renderer.setClearColor(p0.sceneBackground, 1);
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -284,9 +308,10 @@ export function Scene3D() {
 
     // Sunlight is repositioned every frame from the real Sun direction, so the
     // terminator on the Earth and Moon is physically correct.
-    const sunLight = new THREE.DirectionalLight(0xfff4e0, 2.6);
+    const sunLight = new THREE.DirectionalLight(p0.sunLight, p0.sunLightIntensity);
     scene.add(sunLight);
-    scene.add(new THREE.AmbientLight(0x2a3550, 0.55));
+    const ambient = new THREE.AmbientLight(p0.ambientLight, p0.ambientIntensity);
+    scene.add(ambient);
 
     // Starfield: a few thousand points on a large sphere. Purely for depth
     // perception when the camera is far out.
@@ -309,58 +334,60 @@ export function Scene3D() {
       stars[i * 3 + 2] = R * u;
     }
     starGeom.setAttribute('position', new THREE.BufferAttribute(stars, 3));
-    scene.add(
-      new THREE.Points(
-        starGeom,
-        // `sizeAttenuation: false` makes `size` a PIXEL size, so this must stay
-        // small - a value of 12 renders each star as a 12 px square.
-        new THREE.PointsMaterial({
-          color: 0x8fa0c4,
-          size: 1.6,
-          sizeAttenuation: false,
-          transparent: true,
-          opacity: 0.7,
-        }),
-      ),
-    );
+    // `sizeAttenuation: false` makes `size` a PIXEL size, so this must stay
+    // small - a value of 12 renders each star as a 12 px square.
+    const starMat = new THREE.PointsMaterial({
+      color: p0.starColor,
+      size: 1.6,
+      sizeAttenuation: false,
+      transparent: true,
+      opacity: p0.starOpacity,
+    });
+    const starPoints = new THREE.Points(starGeom, starMat);
+    // Pale dots on a pale sky read as rendering dirt, so light mode hides
+    // the starfield entirely rather than recolouring it.
+    starPoints.visible = p0.starOpacity > 0;
+    scene.add(starPoints);
 
-    const earth = buildEarth();
+    const earthBuilt = buildEarth(p0);
+    const earth = earthBuilt.group;
     scene.add(earth);
-    const moon = buildMoon();
+    const moonBuilt = buildMoon(p0);
+    const moon = moonBuilt.group;
     scene.add(moon);
 
-    const earthMarker = makeBodyMarker('Earth', '#7fb6ee');
-    const moonMarker = makeBodyMarker('Moon', '#d8d3c6');
+    // Marker sprites bake their colour into a canvas texture, so a theme
+    // change replaces them rather than recolouring them.
+    let earthMarker = makeBodyMarker('Earth', p0.earthMarker);
+    let moonMarker = makeBodyMarker('Moon', p0.moonMarker);
     scene.add(earthMarker);
     scene.add(moonMarker);
 
     // Lunar orbit reference circle, filled in on each rebuild.
-    const moonOrbit = new THREE.Line(
-      new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: COLORS.moonOrbit, transparent: true, opacity: 0.5 }),
-    );
+    const moonOrbitMat = new THREE.LineBasicMaterial({
+      color: p0.moonOrbitLine,
+      transparent: true,
+      opacity: 0.5,
+    });
+    const moonOrbit = new THREE.Line(new THREE.BufferGeometry(), moonOrbitMat);
     scene.add(moonOrbit);
 
     // Trajectory: two lines sharing one position buffer. `trail` draws the
     // travelled part, `future` the remainder, using draw ranges rather than
     // separate buffers so nothing is copied per frame.
     const trailGeom = new THREE.BufferGeometry();
-    const trail = new THREE.Line(
-      trailGeom,
-      new THREE.LineBasicMaterial({ color: COLORS.trail, linewidth: 2 }),
-    );
+    const trailMat = new THREE.LineBasicMaterial({ color: p0.trailColor, linewidth: 2 });
+    const trail = new THREE.Line(trailGeom, trailMat);
     trail.frustumCulled = false;
     scene.add(trail);
 
     const futureGeom = new THREE.BufferGeometry();
-    const future = new THREE.Line(
-      futureGeom,
-      new THREE.LineBasicMaterial({
-        color: COLORS.future,
-        transparent: true,
-        opacity: 0.55,
-      }),
-    );
+    const futureMat = new THREE.LineBasicMaterial({
+      color: p0.futureColor,
+      transparent: true,
+      opacity: p0.futureOpacity,
+    });
+    const future = new THREE.Line(futureGeom, futureMat);
     future.frustumCulled = false;
     scene.add(future);
 
@@ -369,34 +396,97 @@ export function Scene3D() {
     const craftGroup = new THREE.Group();
     scene.add(craftGroup);
 
-    const craft = new THREE.Mesh(
-      new THREE.SphereGeometry(1, 16, 12),
-      new THREE.MeshBasicMaterial({ color: COLORS.craft }),
-    );
+    const craftMat = new THREE.MeshBasicMaterial({ color: p0.craftColor });
+    const craft = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), craftMat);
     craftGroup.add(craft);
 
     // The sail plane is drawn as a thin double-sided square whose normal is
     // the commanded sail normal - this is what makes "why is it accelerating"
     // legible at a glance.
-    const sailPlane = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({
-        color: COLORS.sail,
-        transparent: true,
-        opacity: 0.3,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      }),
-    );
+    const sailPlaneMat = new THREE.MeshBasicMaterial({
+      color: p0.sailPlaneColor,
+      transparent: true,
+      opacity: p0.sailPlaneOpacity,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const sailPlane = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), sailPlaneMat);
     craftGroup.add(sailPlane);
 
     const vectors = {
-      sun: makeArrow(COLORS.sun, 1),
-      normal: makeArrow(COLORS.normal, 1),
-      velocity: makeArrow(COLORS.velocity, 1),
-      accel: makeArrow(COLORS.accel, 1),
+      sun: makeArrow(p0.vecSun, 1),
+      normal: makeArrow(p0.vecNormal, 1),
+      velocity: makeArrow(p0.vecVelocity, 1),
+      accel: makeArrow(p0.vecAccel, 1),
     };
     for (const a of Object.values(vectors)) craftGroup.add(a);
+
+    const themeTargets: ThemeTargets = {
+      earthSurface: earthBuilt.surface,
+      graticule: earthBuilt.graticule,
+      equator: earthBuilt.equator,
+      atmosphere: earthBuilt.atmosphere,
+      moonSurface: moonBuilt.surface,
+      moonOrbit: moonOrbitMat,
+      stars: starMat,
+      trail: trailMat,
+      future: futureMat,
+      craft: craftMat,
+      sailPlane: sailPlaneMat,
+      ambient,
+      sunLight,
+    };
+
+    /** Apply a palette to the live scene, without rebuilding it. */
+    applyPaletteRef.current = (p: ThemePalette) => {
+      renderer.setClearColor(p.sceneBackground, 1);
+      themeTargets.earthSurface.color.setHex(p.earthSurface);
+      themeTargets.graticule.color.setHex(p.earthGraticule);
+      themeTargets.equator.color.setHex(p.earthEquator);
+      themeTargets.atmosphere.color.setHex(p.earthAtmosphere);
+      themeTargets.atmosphere.opacity = p.earthAtmosphereOpacity;
+      themeTargets.atmosphere.blending =
+        p.name === 'dark' ? THREE.AdditiveBlending : THREE.NormalBlending;
+      themeTargets.moonSurface.color.setHex(p.moonSurface);
+      themeTargets.moonOrbit.color.setHex(p.moonOrbitLine);
+      themeTargets.stars.color.setHex(p.starColor);
+      themeTargets.stars.opacity = p.starOpacity;
+      starPoints.visible = p.starOpacity > 0;
+      themeTargets.trail.color.setHex(p.trailColor);
+      themeTargets.future.color.setHex(p.futureColor);
+      themeTargets.future.opacity = p.futureOpacity;
+      themeTargets.craft.color.setHex(p.craftColor);
+      themeTargets.sailPlane.color.setHex(p.sailPlaneColor);
+      themeTargets.sailPlane.opacity = p.sailPlaneOpacity;
+      themeTargets.ambient.color.setHex(p.ambientLight);
+      themeTargets.ambient.intensity = p.ambientIntensity;
+      themeTargets.sunLight.color.setHex(p.sunLight);
+      themeTargets.sunLight.intensity = p.sunLightIntensity;
+
+      vectors.sun.setColor(p.vecSun);
+      vectors.normal.setColor(p.vecNormal);
+      vectors.velocity.setColor(p.vecVelocity);
+      vectors.accel.setColor(p.vecAccel);
+
+      // Marker labels are baked into canvas textures, so the sprites have to
+      // be replaced rather than recoloured. The old texture and material are
+      // disposed to avoid leaking GPU memory on repeated toggles.
+      const swap = (old: THREE.Sprite, next: THREE.Sprite) => {
+        next.visible = old.visible;
+        next.position.copy(old.position);
+        next.scale.copy(old.scale);
+        scene.remove(old);
+        old.material.map?.dispose();
+        old.material.dispose();
+        scene.add(next);
+      };
+      const nextEarth = makeBodyMarker('Earth', p.earthMarker);
+      const nextMoon = makeBodyMarker('Moon', p.moonMarker);
+      swap(earthMarker, nextEarth);
+      swap(moonMarker, nextMoon);
+      earthMarker = nextEarth;
+      moonMarker = nextMoon;
+    };
 
     const onResize = () => {
       const w = mount.clientWidth;
@@ -704,6 +794,13 @@ export function Scene3D() {
       r.controls.update();
     }
   }, [positions, samples, centre, result]);
+
+  // --- Retheme --------------------------------------------------------
+  // Runs on mount too, which is harmless (it re-applies the palette the scene
+  // was just built with) and means there is only one code path.
+  useEffect(() => {
+    applyPaletteRef.current?.(palette);
+  }, [palette]);
 
   // Camera target changes are applied by the render loop; nothing to do here
   // beyond keeping the effect dependencies honest for lint.

@@ -1,13 +1,33 @@
 /*
  * Solar Sail Simulator - application styling.
  *
- * Deliberately a dark, low-chroma engineering palette: the 3D trajectory view
- * is the visual centrepiece and anything saturated in the chrome competes with
- * it. Colour is reserved for meaning (the vector legend, warning severity,
- * chart traces), never for decoration.
+ * A low-chroma engineering palette in both themes: the trajectory view is the
+ * visual centrepiece and anything saturated in the chrome competes with it.
+ * Colour is reserved for meaning (the vector legend, warning severity, chart
+ * traces), never for decoration.
+ *
+ * THEMING
+ * -------
+ * `src/ui/theme.ts` stamps an explicit `data-theme="dark"|"light"` onto
+ * <html>, including when the user's choice is "system" - the resolution
+ * happens in JS. That means this file only ever needs two concrete states and
+ * never has to combine an attribute selector with a `prefers-color-scheme`
+ * media query, which is where theming bugs usually live.
+ *
+ * Every colour below is a token. Rules further down reference only tokens, so
+ * adding a third theme would mean adding one block here and one palette in
+ * theme.ts - nothing else.
+ *
+ * The 3D view, the 2D canvas and the Plotly charts cannot read CSS variables,
+ * so they take their colours from `theme.ts` instead. The tokens that appear
+ * in both places are listed in `CHROME_TOKENS` there and checked by a test.
  */
 
-:root {
+/* ---------------- Dark theme (the default) ---------------- */
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
   /* Surfaces, darkest to lightest */
   --bg-0: #080b12;
   --bg-1: #0d1119;
@@ -39,10 +59,116 @@
   --err: #ff6b6b;
   --ok: #5fd68a;
 
+  /* Notice tints, as explicit tokens so the light theme can use solid
+     pastels rather than low-alpha washes over a white page. */
+  --notice-info-bg: rgba(77, 163, 255, 0.07);
+  --notice-info-border: rgba(77, 163, 255, 0.28);
+  --notice-info-text: var(--text-1);
+  --notice-warn-bg: rgba(255, 179, 71, 0.07);
+  --notice-warn-border: rgba(255, 179, 71, 0.3);
+  --notice-warn-text: #f0d5ae;
+  --notice-err-bg: rgba(255, 107, 107, 0.08);
+  --notice-err-border: rgba(255, 107, 107, 0.32);
+  --notice-err-text: #f5c4c4;
+  --notice-ok-bg: rgba(95, 214, 138, 0.07);
+  --notice-ok-border: rgba(95, 214, 138, 0.3);
+  --notice-ok-text: #c3ecd3;
+
+  /* Viewport and overlay chrome */
+  --viewport-bg: radial-gradient(ellipse at 50% 45%, #0e1523 0%, #05070c 75%);
+  --hud-bg: rgba(8, 11, 18, 0.82);
+  --toolbar-bg: rgba(13, 17, 25, 0.85);
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+
+  /* Text drawn on top of an accent-coloured fill. */
+  --on-accent: #05080f;
+
+  --eclipse-bg: rgba(40, 30, 8, 0.9);
+  --equation-bg: var(--bg-0);
+  --equation-text: #cfe0f5;
+  --input-bg: var(--bg-0);
+  --scrollbar-thumb: var(--bg-4);
+
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   --radius: 4px;
+}
+
+/* ---------------- Light theme ---------------- */
+/*
+ * Not a mechanical inversion of the dark palette.
+ *
+ * The surface ramp is deliberately COMPRESSED: dark mode can separate five
+ * surfaces across a wide luminance range, but on a light background the same
+ * spread looks muddy, so the steps are small and separation leans on borders
+ * instead. Panels are near-white while the page behind them is faintly grey,
+ * which is the opposite ordering to the dark theme (where panels are LIGHTER
+ * than the page). That is why `--bg-0` and `--bg-1` swap roles here.
+ *
+ * Accent and semantic hues are darkened, not re-chosen, so the vector legend
+ * the user has learned still reads the same.
+ */
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-0: #e8edf4; /* page behind the panels */
+  --bg-1: #f7f9fc; /* panel surface */
+  --bg-2: #eef2f8; /* recessed rows, section fills */
+  --bg-3: #e3e9f2; /* buttons */
+  --bg-4: #d5dee9; /* raised / hovered */
+
+  --line: #d3dae5;
+  --line-strong: #b3bfd0;
+
+  --text-0: #131923;
+  --text-1: #3d4757;
+  --text-2: #667286;
+
+  --accent: #1565c0;
+  --accent-dim: #4a8fd4;
+
+  --c-sun: #b07d00;
+  --c-normal: #1f8f3c;
+  --c-velocity: #1273c4;
+  --c-accel: #d33232;
+  --c-orbit: #7b869a;
+  --c-trail: #1565c0;
+  --c-moon: #8a8478;
+  --c-earth: #2f6ba8;
+
+  --warn: #a8620a;
+  --err: #c62828;
+  --ok: #1f7a3f;
+
+  /* Solid pastels read far better than low-alpha washes on white. */
+  --notice-info-bg: #e8f1fc;
+  --notice-info-border: #b9d5f2;
+  --notice-info-text: #1c3a5c;
+  --notice-warn-bg: #fdf3e3;
+  --notice-warn-border: #ecd3a6;
+  --notice-warn-text: #6b4407;
+  --notice-err-bg: #fdecec;
+  --notice-err-border: #f2c2c2;
+  --notice-err-text: #8c1f1f;
+  --notice-ok-bg: #e9f7ee;
+  --notice-ok-border: #b8e0c6;
+  --notice-ok-text: #14572c;
+
+  --viewport-bg: radial-gradient(ellipse at 50% 45%, #ffffff 0%, #e4eaf3 78%);
+  --hud-bg: rgba(255, 255, 255, 0.9);
+  --toolbar-bg: rgba(255, 255, 255, 0.9);
+  --shadow: 0 6px 18px rgba(23, 38, 61, 0.16);
+
+  /* The light accent is a dark blue, so on-accent text must be white here -
+     the dark theme's near-black would be unreadable. */
+  --on-accent: #ffffff;
+
+  --eclipse-bg: #fdf3e3;
+  --equation-bg: #f0f4fa;
+  --equation-text: #1e3350;
+  --input-bg: #ffffff;
+  --scrollbar-thumb: #c2ccd9;
 }
 
 * {
@@ -192,7 +318,7 @@ body {
 
 .btn-primary:hover:not(:disabled) {
   background: var(--accent);
-  color: #05080f;
+  color: var(--on-accent);
 }
 
 .btn-sm {
@@ -350,7 +476,7 @@ body {
 .text-input,
 textarea.text-input {
   width: 100%;
-  background: var(--bg-0);
+  background: var(--input-bg);
   color: var(--text-0);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -479,7 +605,7 @@ textarea.text-input {
   font-weight: 400;
   line-height: 1.5;
   color: var(--text-1);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow);
 }
 
 .info-pop code {
@@ -657,9 +783,9 @@ textarea.text-input {
 }
 
 .notice-info {
-  background: rgba(77, 163, 255, 0.07);
-  border-color: rgba(77, 163, 255, 0.28);
-  color: var(--text-1);
+  background: var(--notice-info-bg);
+  border-color: var(--notice-info-border);
+  color: var(--notice-info-text);
 }
 .notice-info .notice-glyph {
   background: var(--accent-dim);
@@ -667,33 +793,33 @@ textarea.text-input {
 }
 
 .notice-warning {
-  background: rgba(255, 179, 71, 0.07);
-  border-color: rgba(255, 179, 71, 0.3);
-  color: #f0d5ae;
+  background: var(--notice-warn-bg);
+  border-color: var(--notice-warn-border);
+  color: var(--notice-warn-text);
 }
 .notice-warning .notice-glyph {
   background: var(--warn);
-  color: #2a1a00;
+  color: #fff;
 }
 
 .notice-error {
-  background: rgba(255, 107, 107, 0.08);
-  border-color: rgba(255, 107, 107, 0.32);
-  color: #f5c4c4;
+  background: var(--notice-err-bg);
+  border-color: var(--notice-err-border);
+  color: var(--notice-err-text);
 }
 .notice-error .notice-glyph {
   background: var(--err);
-  color: #2a0000;
+  color: #fff;
 }
 
 .notice-success {
-  background: rgba(95, 214, 138, 0.07);
-  border-color: rgba(95, 214, 138, 0.3);
-  color: #c3ecd3;
+  background: var(--notice-ok-bg);
+  border-color: var(--notice-ok-border);
+  color: var(--notice-ok-text);
 }
 .notice-success .notice-glyph {
   background: var(--ok);
-  color: #02220f;
+  color: #fff;
 }
 
 /* ------------------------------------------------------------------ */
@@ -729,14 +855,14 @@ textarea.text-input {
   font-family: var(--mono);
   font-size: 11.5px;
   line-height: 1.65;
-  background: var(--bg-0);
+  background: var(--equation-bg);
   border: 1px solid var(--line);
   border-left: 2px solid var(--accent-dim);
   border-radius: var(--radius);
   padding: 9px 11px;
   margin: 8px 0;
   overflow-x: auto;
-  color: #cfe0f5;
+  color: var(--equation-text);
   white-space: pre;
 }
 
@@ -783,7 +909,7 @@ textarea.text-input {
   position: relative;
   min-height: 0;
   min-width: 0;
-  background: radial-gradient(ellipse at 50% 45%, #0e1523 0%, #05070c 75%);
+  background: var(--viewport-bg);
   overflow: hidden;
 }
 
@@ -815,7 +941,7 @@ textarea.text-input {
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   overflow: hidden;
-  background: rgba(13, 17, 25, 0.85);
+  background: var(--toolbar-bg);
   backdrop-filter: blur(6px);
 }
 
@@ -859,7 +985,7 @@ textarea.text-input {
   left: 8px;
   bottom: 8px;
   z-index: 3;
-  background: rgba(8, 11, 18, 0.82);
+  background: var(--hud-bg);
   backdrop-filter: blur(8px);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -903,7 +1029,7 @@ textarea.text-input {
   right: 8px;
   bottom: 8px;
   z-index: 3;
-  background: rgba(8, 11, 18, 0.82);
+  background: var(--hud-bg);
   backdrop-filter: blur(8px);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -940,7 +1066,7 @@ textarea.text-input {
   top: 8px;
   right: 8px;
   z-index: 4;
-  background: rgba(40, 30, 8, 0.9);
+  background: var(--eclipse-bg);
   border: 1px solid var(--warn);
   color: var(--warn);
   border-radius: var(--radius);
@@ -1067,7 +1193,7 @@ textarea.text-input {
 
 .table input {
   width: 100%;
-  background: var(--bg-0);
+  background: var(--input-bg);
   border: 1px solid var(--line);
   border-radius: 2px;
   color: var(--text-0);
@@ -1120,7 +1246,7 @@ textarea.text-input {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--bg-4);
+  background: var(--scrollbar-thumb);
   border-radius: 5px;
   border: 2px solid var(--bg-0);
 }
@@ -1203,4 +1329,19 @@ textarea.text-input {
   color: var(--text-2);
   line-height: 1.5;
   margin-bottom: 7px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Theme toggle                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The theme buttons carry a glyph plus a word. On a narrow topbar the words
+ * push the run controls onto a second row, so below 1500px only the glyphs
+ * remain - which is why each button has an explanatory `title`.
+ */
+@media (max-width: 1500px) {
+  .seg-btn-text {
+    display: none;
+  }
 }
