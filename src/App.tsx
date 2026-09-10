@@ -11,7 +11,7 @@
 
 import { useEffect } from 'react';
 import { useStore, type PanelTab } from './state/store.ts';
-import { Viewport } from './ui/Viewport.tsx';
+import { PlaybackRateControl, Viewport } from './ui/Viewport.tsx';
 import { Charts } from './ui/panels/Charts.tsx';
 import { MissionPanel } from './ui/panels/MissionPanel.tsx';
 import { SpacecraftPanel } from './ui/panels/SpacecraftPanel.tsx';
@@ -226,6 +226,10 @@ function TopBar() {
         </span>
 
         <div className="topbar-spacer" />
+
+        {/* Placed beside the run buttons: choosing a rate is part of setting
+            up a viewing session, not of navigating within one. */}
+        <PlaybackRateControl />
 
         <ThemeToggle />
 

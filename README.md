@@ -131,17 +131,27 @@ decoupled from the integration timestep.
 
 ### Playback rate
 
-The rate is set in **simulation time per real second** — `1:1`, `1 min/s`,
-`10 min/s`, `1 h/s`, `1 d/s`, or anywhere between via a log slider — rather
-than as an abstract multiplier. The timeline reports **how long one revolution
-takes to watch** at the current setting, and a `1 rev / 30 s` button sets the
-rate from the actual orbital period.
+The rate lives **beside the Run button** and is set in **simulation time per
+real second** — not as an abstract multiplier, whose meaning would change with
+the output interval and the display refresh rate.
 
-This matters for studying attitude: to see the sail feather and re-point
-through different parts of an orbit you want a revolution to take tens of
-seconds, which is 100–300× real time in LEO and something quite different at
-GEO. A samples-per-frame multiplier cannot express that, because its meaning
-changes with the output interval and the display refresh rate.
+A solar-sail study has two timescales of interest, and they are about **100x
+apart**:
+
+| | What you watch | Rate for a 500 km LEO |
+| --- | --- | --- |
+| **`1 rev`** | The sail feathering and re-pointing through one revolution | ~190x real time (1 rev in 30 s) |
+| **`Whole run`** | The orbit itself evolving over the whole mission | ~20 000x real time (7 days in 30 s) |
+
+No single rate serves both: at `1 rev` the default 7-day run takes **53
+minutes** to play, and at `Whole run` a revolution flashes past in **0.28 s**.
+So both are one click apart, a log slider covers everything between, and the
+timeline always reports **both** numbers (`1 rev ≈ 30 s · run ≈ 53.4 min`) so
+the trade-off is visible rather than hidden.
+
+The rate auto-fits the whole run into ~30 s when a run finishes — the mission
+scale is what you want to see first — and stops auto-fitting once you choose a
+rate, so A/B comparisons stay comparable across re-runs.
 
 For parking on a specific point in the orbit:
 
@@ -150,10 +160,12 @@ For parking on a specific point in the orbit:
 | `Space` | Play / pause |
 | `←` `→` | Step one recorded sample |
 | `Shift` + `←` `→` | Step ten samples |
-| `◄ ►` buttons | Same, next to the timeline |
+| `◄ ►` buttons | Same, beside the timeline |
+
+Shortcuts are ignored while a text field or slider has focus.
 
 The HUD reports the **revolution number** and **orbit phase** (argument of
-latitude) so "which part of the orbit is this?" is readable rather than
+latitude), so "which part of the orbit is this?" is readable rather than
 inferred from the picture.
 
 The views **interpolate between recorded samples**, so slow playback glides
@@ -162,8 +174,23 @@ The interpolation spans at most one output interval (2.7% of a revolution), so
 a sharp attitude switch appears smoothed over that much; HUD numbers use the
 nearest recorded sample so every figure shown is a real computed value, and
 pausing or stepping lands exactly on a sample. The timeline warns when the
-sampling is too coarse to resolve more detail, in which case reduce the output
-interval and re-run.
+sampling — not the rate — is the limiting factor.
+
+### Camera
+
+Earth-centred, Moon-centred, spacecraft-following, or free. Following
+translates the camera with the body rather than only re-aiming it, so your
+chosen viewing direction and distance are preserved while the rig travels
+along.
+
+The spacecraft is followed in its own **orbital (RSW) frame** rather than in
+inertial axes — the offset is held fixed relative to radial / along-track /
+orbit-normal, so it revolves with the craft. This is not cosmetic: in a 500 km
+orbit the spacecraft sits only 500 km above the surface, so *any* fixed
+inertial offset longer than that which happens to point Earthward puts the
+camera inside the planet and occludes the craft for much of the orbit. Locking
+the offset to the orbital frame makes that impossible, and "above and behind"
+stays above and behind all the way round.
 
 ### Scenarios
 

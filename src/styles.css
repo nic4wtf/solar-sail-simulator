@@ -1353,12 +1353,22 @@ textarea.text-input {
 .rate-control {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background: var(--bg-2);
-  padding: 2px 8px 2px 0;
+  padding: 2px 6px 2px 0;
   flex-shrink: 0;
+}
+
+.rate-presets {
+  /* Sits inside .rate-control, so it drops its own outer border. */
+  border: none;
+  background: transparent;
+}
+
+.rate-presets button {
+  border-left: 1px solid var(--line);
 }
 
 .rate-slider {
@@ -1402,5 +1412,19 @@ textarea.text-input {
 @media (max-width: 1300px) {
   .rate-slider {
     width: 64px;
+  }
+}
+
+/*
+ * Topbar crowding. The run controls must never wrap away from the Run button,
+ * so the rate control gives up its parts first: the preset labels at 1500px,
+ * then the numeric readout at 1150px, leaving just the slider.
+ */
+@media (max-width: 1150px) {
+  .rate-readout {
+    display: none;
+  }
+  .rate-slider {
+    width: 56px;
   }
 }

@@ -287,6 +287,10 @@ export function Scene3D() {
     // materials rather than rebuilding the scene.
     const p0 = PALETTES[useStore.getState().theme];
 
+    // Central body radius in scene units, used to size the chase-camera
+    // standoff. Read per frame from the result so it follows a scenario change.
+    let env0BodyRadius = R_EARTH * S;
+
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setClearColor(p0.sceneBackground, 1);
@@ -510,7 +514,24 @@ export function Scene3D() {
       v1: new THREE.Vector3(),
       v2: new THREE.Vector3(),
       v3: new THREE.Vector3(),
+      follow: new THREE.Vector3(),
+      delta: new THREE.Vector3(),
+      offset: new THREE.Vector3(),
+      R: new THREE.Vector3(),
+      Sax: new THREE.Vector3(),
+      W: new THREE.Vector3(),
       q: new THREE.Quaternion(),
+    };
+
+    /**
+     * Previous frame's orbital basis for the chase camera, and whether it is
+     * valid yet. See the camera-follow block for why this is needed.
+     */
+    const chase = {
+      valid: false,
+      R: new THREE.Vector3(),
+      S: new THREE.Vector3(),
+      W: new THREE.Vector3(),
     };
 
     /**
@@ -526,8 +547,6 @@ export function Scene3D() {
       const st = useStore.getState();
       const res = st.result;
 
-      controls.update();
-
       // Advance playback from measured wall time.
       const nowMs = performance.now();
       const frameDt = (nowMs - lastFrameMs) / 1000;
@@ -541,6 +560,7 @@ export function Scene3D() {
         // than stepping between samples.
         const view = interpolatedState(st) ?? s;
         const isMoonCentred = res.config.centralBody === 'moon';
+        env0BodyRadius = (isMoonCentred ? R_MOON : R_EARTH) * S;
 
         // --- Body positions -------------------------------------------
         const moonRel = moonPosition(s.jd, res.config.moonModel);
@@ -668,18 +688,110 @@ export function Scene3D() {
         }
 
         // --- Camera follow ---------------------------------------------
-        // Only the orbit target moves; the user's rotation and zoom are
-        // preserved, so following a body never fights the mouse.
+        //
+        // Moving only `controls.target` (the look-at point) makes the camera
+        // PIVOT IN PLACE: it swings round to keep the body in frame while
+        // staying put itself. A followed spacecraft then slides past and the
+        // viewing distance swings by the whole orbit diameter. That was the
+        // original bug.
+        //
+        // For the Earth and the Moon, translating the camera by the same
+        // delta as the target is the right fix - it preserves the offset the
+        // user dragged and scrolled to while the rig travels with the body.
+        //
+        // For the SPACECRAFT that is not enough, because a fixed offset in
+        // INERTIAL space can put the camera inside the planet. In a 500 km
+        // orbit the craft sits only 0.5 scene units above the surface, so any
+        // offset longer than that which happens to point Earthward buries the
+        // camera in the Earth and the craft is occluded for much of the orbit.
+        //
+        // So the spacecraft is followed in its own ORBITAL frame: the offset
+        // is held fixed in RSW (radial / along-track / orbit-normal) rather
+        // than in inertial axes, and therefore revolves with the craft. The
+        // camera keeps its relative viewpoint - "above and behind" stays above
+        // and behind - and can never swing into the planet. This is also what
+        // the request asked for: the camera orbits alongside the satellite.
         if (st.cameraTarget === 'spacecraft') {
-          controls.target.set(px, py, pz);
-        } else if (st.cameraTarget === 'moon') {
-          controls.target.copy(moon.position);
-        } else if (st.cameraTarget === 'earth') {
-          controls.target.copy(earth.position);
+          tmp.follow.set(px, py, pz);
+
+          // Current orbital basis at the craft.
+          tmp.R.copy(tmp.follow).normalize();
+          tmp.W.set(
+            s.y * s.vz - s.z * s.vy,
+            s.z * s.vx - s.x * s.vz,
+            s.x * s.vy - s.y * s.vx,
+          ).normalize();
+          tmp.Sax.crossVectors(tmp.W, tmp.R).normalize();
+
+          if (tmp.R.lengthSq() > 0 && tmp.W.lengthSq() > 0) {
+            // The offset as it currently stands, which includes anything the
+            // user has just dragged or scrolled.
+            tmp.offset.subVectors(camera.position, controls.target);
+
+            if (chase.valid && tmp.offset.lengthSq() > 0) {
+              // Re-express the offset in the PREVIOUS frame's basis, then
+              // rebuild it in the current one. Decomposing and recomposing
+              // this way is what lets the user's own camera changes survive:
+              // they are read back out of the inertial offset every frame
+              // rather than being overwritten.
+              const cR = tmp.offset.dot(chase.R);
+              const cS = tmp.offset.dot(chase.S);
+              const cW = tmp.offset.dot(chase.W);
+              camera.position
+                .copy(tmp.follow)
+                .addScaledVector(tmp.R, cR)
+                .addScaledVector(tmp.Sax, cS)
+                .addScaledVector(tmp.W, cW);
+            } else {
+              // First frame of the follow: place the camera above and behind
+              // the craft. The radial component is deliberately positive and
+              // dominant so the camera starts outside the central body
+              // whatever the altitude.
+              const standoff = env0BodyRadius * 0.5;
+              camera.position
+                .copy(tmp.follow)
+                .addScaledVector(tmp.R, standoff * 0.55)
+                .addScaledVector(tmp.Sax, -standoff * 0.75)
+                .addScaledVector(tmp.W, standoff * 0.36);
+              camera.near = Math.max(0.0005, standoff * 1e-3);
+              camera.updateProjectionMatrix();
+            }
+
+            controls.target.copy(tmp.follow);
+            chase.R.copy(tmp.R);
+            chase.S.copy(tmp.Sax);
+            chase.W.copy(tmp.W);
+            chase.valid = true;
+          }
+        } else {
+          chase.valid = false;
+          const followTarget =
+            st.cameraTarget === 'moon'
+              ? moon.position
+              : st.cameraTarget === 'earth'
+                ? earth.position
+                : null;
+          if (followTarget) {
+            tmp.delta.subVectors(followTarget, controls.target);
+            // Guard against the first frame after a target switch, where the
+            // delta can be the whole scene width and would fling the camera.
+            // Snapping the target without moving the camera is right there:
+            // the user asked to look at something new.
+            if (
+              tmp.delta.lengthSq() <
+              controls.target.distanceToSquared(camera.position) * 4
+            ) {
+              camera.position.add(tmp.delta);
+            }
+            controls.target.copy(followTarget);
+          }
         }
 
       }
 
+      // Applied after any follow adjustment so the damping interpolates
+              // toward the new target on this frame rather than the next.
+      controls.update();
       renderer.render(scene, camera);
     };
 
@@ -802,8 +914,8 @@ export function Scene3D() {
     applyPaletteRef.current?.(palette);
   }, [palette]);
 
-  // Camera target changes are applied by the render loop; nothing to do here
-  // beyond keeping the effect dependencies honest for lint.
+  // Read by the render loop via getState(); referenced here only to keep the
+  // subscriptions alive.
   void cameraTarget;
   void showVectors;
   void showOrbitTrail;

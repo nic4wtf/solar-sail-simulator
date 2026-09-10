@@ -82,6 +82,21 @@ interface AppState {
    */
   playbackRate: number;
   /**
+   * True while the rate is still being chosen automatically.
+   *
+   * A solar-sail study has two timescales of interest that are ~100x apart:
+   * the ATTITUDE dynamics within one revolution, and the ORBIT evolution over
+   * the whole mission. No single rate serves both - at "1 revolution per 30
+   * seconds" the default 7-day run takes 53 minutes to play, and at "whole
+   * run per 30 seconds" a revolution flashes past in 0.28 s.
+   *
+   * So the rate defaults to the mission scale (the whole run in ~30 s, which
+   * is what you want to see first after pressing Run) and refits itself to
+   * each new run - until the user picks a rate, after which their choice is
+   * respected across re-runs so A/B comparisons stay comparable.
+   */
+  rateAuto: boolean;
+  /**
    * Fractional position between `cursor` and `cursor + 1`, 0..1.
    *
    * Recorded samples are far apart compared with a display frame - the
@@ -130,6 +145,12 @@ interface AppState {
   setCursor: (index: number) => void;
   stepCursor: (delta: number) => void;
   setPlaybackRate: (rate: number) => void;
+  /** Derive the rate from a viewing time for one revolution or the whole run. */
+  fitPlaybackRate: (
+    scale: 'revolution' | 'mission',
+    seconds: number,
+    auto?: boolean,
+  ) => void;
   /**
    * Advance playback by a real-time delta [s]. Called from the render loop,
    * which owns the frame clock.
@@ -182,7 +203,9 @@ export const useStore = create<AppState>((set, get) => ({
   // 600 s of mission time per real second = 10 simulated minutes per second.
   // A 95-minute LEO revolution then takes ~9.5 s to watch, which is slow
   // enough to follow the sail attitude through it.
+  // Overwritten by the auto-fit as soon as the first run completes.
   playbackRate: 600,
+  rateAuto: true,
   cursorFrac: 0,
   showFullTrajectory: true,
 
@@ -268,9 +291,15 @@ export const useStore = create<AppState>((set, get) => ({
         // which is what the user asked for by pressing Run.
         runState: 'playing',
         cursor: 0,
+        cursorFrac: 0,
         progress: 1,
         dirty: false,
       });
+
+      // Fit the whole run into ~30 s unless the user has chosen a rate. The
+      // mission scale is the right first view: it answers "what happened over
+      // the mission", and the Attitude preset is one click away for detail.
+      if (get().rateAuto) get().fitPlaybackRate('mission', 30, true);
     } catch (err) {
       set({
         runState: 'idle',
@@ -333,7 +362,33 @@ export const useStore = create<AppState>((set, get) => ({
   setPlaybackRate: (rate) =>
     // Clamped to the range the UI slider exposes; 1e7 is about 4 months of
     // mission time per second, beyond which nothing is discernible.
-    set({ playbackRate: Math.max(0.1, Math.min(1e7, rate)) }),
+    // An explicit choice also disables the per-run auto-fit.
+    set({ playbackRate: Math.max(0.1, Math.min(1e7, rate)), rateAuto: false }),
+
+  /**
+   * Set the rate from a target wall-clock viewing time, without counting as a
+   * manual choice if `auto` is set.
+   *
+   * `scale: 'revolution'` fits one orbital revolution into `seconds`;
+   * `scale: 'mission'` fits the entire run into `seconds`.
+   */
+  fitPlaybackRate: (scale, seconds, auto = false) => {
+    const { result } = get();
+    if (!result || seconds <= 0) return;
+
+    let span: number | null = null;
+    if (scale === 'revolution') {
+      const s = result.samples[Math.min(get().cursor, result.samples.length - 1)];
+      // Fall back to the whole run when the trajectory is not periodic (an
+      // escape or a lunar transfer has no revolution to fit).
+      span = s && Number.isFinite(s.period) && s.period > 0 ? s.period : null;
+    }
+    if (span === null) span = result.summary.finalTime;
+    if (!(span > 0)) return;
+
+    const rate = Math.max(0.1, Math.min(1e7, span / seconds));
+    set({ playbackRate: rate, ...(auto ? {} : { rateAuto: false }) });
+  },
 
   advancePlayback: (realDelta) => {
     const { result, runState, cursor, cursorFrac, playbackRate } = get();
