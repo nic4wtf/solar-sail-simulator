@@ -35,7 +35,16 @@ export function Charts() {
   const cursor = useStore((s) => s.cursor);
   const comparisons = useStore((s) => s.comparisons);
   const [group, setGroup] = useState<ChartGroup>('elements');
-  const [collapsed, setCollapsed] = useState(false);
+  /**
+   * Collapsed by default on a narrow screen.
+   *
+   * The charts drawer is the single largest thing in the layout, and on a
+   * phone an expanded drawer leaves the 3D view - which the user just tapped
+   * "View" to see - as a sliver above it. Opening it is one tap.
+   */
+  const [collapsed, setCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches,
+  );
   // Trace colours must follow the theme: dark-mode hues are unreadable on a
   // light background.
   const { traces: PLOT_COLORS, osculating: OSC_COLORS } = usePlotColors();

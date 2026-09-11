@@ -1165,7 +1165,13 @@ export function Scene3D() {
       // includes the outermost drawn orbit when the trajectory is smaller.
       const contextR =
         centre === 'sun' ? Math.max(maxR, 1.6 * AU * activeScale) : maxR;
-      const fit = Math.max(contextR, bodyR * 1.05) * 3.0;
+      // The visible half-WIDTH is the half-height times the aspect ratio, so
+      // on a portrait viewport - a phone, where the aspect is about 0.74 -
+      // fitting the height is not enough and the orbit runs off the sides.
+      // Dividing by the aspect when it is below 1 fits whichever dimension is
+      // tighter. On a landscape viewport this is exactly 1 and changes nothing.
+      const aspect = r.camera.aspect > 0 ? r.camera.aspect : 1;
+      const fit = (Math.max(contextR, bodyR * 1.05) * 3.0) / Math.min(1, aspect);
       const dir = r.camera.position.clone().normalize();
       if (dir.lengthSq() === 0) dir.set(0.6, -0.6, 0.4).normalize();
       r.camera.position.copy(dir.multiplyScalar(fit));
@@ -1190,5 +1196,8 @@ export function Scene3D() {
   void showOrbitTrail;
   void showFullTrajectory;
 
-  return <div ref={mountRef} className="viewport-canvas" style={{ width: '100%', height: '100%' }} />;
+  // Sized by the flex rule in styles.css rather than inline: the viewport is
+  // a flex column that also has to fit the timeline scrubber, so a hard
+  // `height: 100%` here would push the scrubber out of the box.
+  return <div ref={mountRef} className="viewport-canvas" />;
 }

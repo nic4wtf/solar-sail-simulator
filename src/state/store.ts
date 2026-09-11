@@ -35,6 +35,21 @@ export type ViewMode = '3d' | '2d';
 
 export type CameraTarget = 'earth' | 'moon' | 'sun' | 'spacecraft' | 'free';
 
+/**
+ * Which of the three working areas is on screen on a narrow display.
+ *
+ * The desktop layout puts configuration, the trajectory view and the results
+ * side by side. That does not survive a phone: at 390 px the three columns
+ * collapse to strips a hundred pixels tall, and the 3D view - the whole point
+ * of the tool - ends up 25 px high. So below the mobile breakpoint exactly one
+ * area is shown at a time and this selects it.
+ *
+ * It lives in the store rather than in component state because the Run button
+ * switches to the view, which means two different components need to write it.
+ * On a wide screen nothing reads it and it is simply inert.
+ */
+export type MobilePane = 'build' | 'view' | 'results';
+
 export type PanelTab =
   | 'mission'
   | 'spacecraft'
@@ -120,6 +135,8 @@ interface AppState {
   showVectors: boolean;
   showOrbitTrail: boolean;
   activeTab: PanelTab;
+  /** Active working area on a narrow display. Inert on a wide one. */
+  mobilePane: MobilePane;
 
   // --- Comparison ------------------------------------------------------
   comparisons: ComparisonRun[];
@@ -164,6 +181,7 @@ interface AppState {
   setViewMode: (mode: ViewMode) => void;
   setCameraTarget: (target: CameraTarget) => void;
   setActiveTab: (tab: PanelTab) => void;
+  setMobilePane: (pane: MobilePane) => void;
   toggleVectors: () => void;
   toggleOrbitTrail: () => void;
   toggleFullTrajectory: () => void;
@@ -217,6 +235,7 @@ export const useStore = create<AppState>((set, get) => ({
   showVectors: true,
   showOrbitTrail: true,
   activeTab: 'mission',
+  mobilePane: 'build',
 
   comparisons: [],
 
@@ -272,7 +291,10 @@ export const useStore = create<AppState>((set, get) => ({
   run: async () => {
     if (get().runState === 'propagating') return;
     cancelRequested = false;
-    set({ runState: 'propagating', progress: 0, runError: null });
+    // Pressing Run means "show me". On a narrow display the trajectory view is
+    // a separate pane, so this is what makes the button do what it says.
+    // Ignored entirely by the wide layout.
+    set({ runState: 'propagating', progress: 0, runError: null, mobilePane: 'view' });
 
     try {
       const result = await propagate(get().config, {
@@ -454,6 +476,7 @@ export const useStore = create<AppState>((set, get) => ({
   setViewMode: (mode) => set({ viewMode: mode }),
   setCameraTarget: (target) => set({ cameraTarget: target }),
   setActiveTab: (tab) => set({ activeTab: tab }),
+  setMobilePane: (pane) => set({ mobilePane: pane }),
   toggleVectors: () => set((s) => ({ showVectors: !s.showVectors })),
   toggleOrbitTrail: () => set((s) => ({ showOrbitTrail: !s.showOrbitTrail })),
   toggleFullTrajectory: () => set((s) => ({ showFullTrajectory: !s.showFullTrajectory })),

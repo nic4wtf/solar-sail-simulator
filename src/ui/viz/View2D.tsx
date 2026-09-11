@@ -201,6 +201,9 @@ export function View2D() {
         if (pu > maxExtent) maxExtent = pu;
         if (pw > maxExtent) maxExtent = pw;
       }
+      // `Math.min(W, H)` already fits whichever dimension is tighter, so the
+      // 2D view needs no portrait correction - it is the 3D perspective camera
+      // that has to be told about the aspect ratio.
       const margin = 44 * dpr;
       const scale = (Math.min(W, H) / 2 - margin) / (maxExtent * 1.06);
       const cx = W / 2;

@@ -9,8 +9,8 @@
  * working simulation immediately (spec S34) rather than an empty viewport.
  */
 
-import { useEffect } from 'react';
-import { useStore, type PanelTab } from './state/store.ts';
+import { useEffect, useRef } from 'react';
+import { useStore, type MobilePane, type PanelTab } from './state/store.ts';
 import { PlaybackRateControl, Viewport } from './ui/Viewport.tsx';
 import { Charts } from './ui/panels/Charts.tsx';
 import { MissionPanel } from './ui/panels/MissionPanel.tsx';
@@ -44,6 +44,7 @@ export default function App() {
   const run = useStore((s) => s.run);
   const result = useStore((s) => s.result);
   const runState = useStore((s) => s.runState);
+  const mobilePane = useStore((s) => s.mobilePane);
   const syncSystemTheme = useStore((s) => s.syncSystemTheme);
 
   // Auto-run once on mount, so the application opens on a working simulation.
@@ -99,12 +100,30 @@ export default function App() {
   const leftTab = LEFT_TABS.some((t) => t.id === activeTab) ? activeTab : 'mission';
   const rightTab = RIGHT_TABS.some((t) => t.id === activeTab) ? activeTab : 'results';
 
+  /*
+   * Switching tabs scrolls the panel back to the top.
+   *
+   * Without this the new panel opens at whatever offset the previous one was
+   * scrolled to, so tapping "Spacecraft" after scrolling through Mission
+   * lands you in the middle of the mass budget with a half-visible field
+   * above. Barely noticeable in a 340 px desktop column; disorienting on a
+   * phone, where the panel IS the screen.
+   */
+  const leftRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    leftRef.current?.scrollTo({ top: 0 });
+  }, [leftTab]);
+  useEffect(() => {
+    rightRef.current?.scrollTo({ top: 0 });
+  }, [rightTab]);
+
   return (
     <div className="app">
       <TopBar />
-      <div className="app-main">
+      <div className="app-main" data-pane={mobilePane}>
         {/* ---------------- Left: configuration ---------------- */}
-        <div className="panel">
+        <div className="panel pane pane-build" ref={leftRef}>
           <div className="panel-tabs">
             {LEFT_TABS.map((t) => (
               <button
@@ -124,13 +143,13 @@ export default function App() {
         </div>
 
         {/* ---------------- Centre: view + charts ---------------- */}
-        <div className="centre-column">
+        <div className="centre-column pane pane-view">
           <Viewport />
           <Charts />
         </div>
 
         {/* ---------------- Right: results / analysis ---------------- */}
-        <div className="panel">
+        <div className="panel pane pane-results" ref={rightRef}>
           <div className="panel-tabs">
             {RIGHT_TABS.map((t) => (
               <button
@@ -147,7 +166,53 @@ export default function App() {
           {rightTab === 'docs' && <DocsPanel />}
         </div>
       </div>
+      <MobileNav />
     </div>
+  );
+}
+
+/**
+ * Bottom navigation between the three working areas, shown only on a narrow
+ * display.
+ *
+ * At the bottom rather than the top because that is where a thumb reaches on
+ * a phone, and because the top bar is already carrying the Run control. The
+ * three destinations mirror the desktop layout's three columns, so the mental
+ * model is the same on both.
+ */
+function MobileNav() {
+  const mobilePane = useStore((s) => s.mobilePane);
+  const setMobilePane = useStore((s) => s.setMobilePane);
+  const dirty = useStore((s) => s.dirty);
+  const result = useStore((s) => s.result);
+
+  const items: Array<{ id: MobilePane; label: string; glyph: string; hint: string }> = [
+    { id: 'build', label: 'Build', glyph: '\u2699', hint: 'Scenario, orbit, sail and steering' },
+    { id: 'view', label: 'View', glyph: '\u25C9', hint: 'Trajectory view and charts' },
+    { id: 'results', label: 'Results', glyph: '\u2261', hint: 'Results, sensitivity and physics' },
+  ];
+
+  return (
+    <nav className="mobile-nav" aria-label="Sections">
+      {items.map((it) => (
+        <button
+          key={it.id}
+          className={`mobile-nav-btn ${mobilePane === it.id ? 'active' : ''}`}
+          onClick={() => setMobilePane(it.id)}
+          aria-current={mobilePane === it.id ? 'page' : undefined}
+          title={it.hint}
+        >
+          <span className="mobile-nav-glyph" aria-hidden="true">
+            {it.glyph}
+          </span>
+          <span className="mobile-nav-label">{it.label}</span>
+          {/* A dot on Build when the configuration has moved on from the last
+              run, since on a phone the "re-run" note in the top bar is one of
+              the things there is no room for. */}
+          {it.id === 'build' && dirty && result && <span className="mobile-nav-dot" />}
+        </button>
+      ))}
+    </nav>
   );
 }
 
@@ -218,7 +283,7 @@ function TopBar() {
           <span className="brand-version">v{__APP_VERSION__}</span>
         </div>
 
-        <span className="small muted" title={config.name}>
+        <span className="small muted desktop-only" title={config.name}>
           {config.name}
           {dirty && hasResult && (
             <span style={{ color: 'var(--warn)' }}> - configuration changed, re-run</span>
@@ -228,8 +293,12 @@ function TopBar() {
         <div className="topbar-spacer" />
 
         {/* Placed beside the run buttons: choosing a rate is part of setting
-            up a viewing session, not of navigating within one. */}
-        <PlaybackRateControl />
+            up a viewing session, not of navigating within one. On a narrow
+            screen there is no room, and it reappears inside the view's own
+            toolbar instead - see Viewport. */}
+        <div className="desktop-only">
+          <PlaybackRateControl />
+        </div>
 
         <ThemeToggle />
 
@@ -261,15 +330,18 @@ function TopBar() {
             &#10073;&#10073;
           </button>
           <button
-            className="btn btn-icon"
+            className="btn btn-icon desktop-only"
             onClick={stop}
             disabled={!hasResult || propagating}
             title="Stop and rewind to the start"
           >
             &#9632;
           </button>
+          {/* Dropped on a narrow screen: rewinding is a drag of the timeline
+              scrubber away, and a full reset lives in Build > Save, load and
+              reset - neither is worth a permanent button at 390 px. */}
           <button
-            className="btn btn-icon"
+            className="btn btn-icon desktop-only"
             onClick={reset}
             disabled={propagating}
             title="Reset the whole configuration to the default scenario"

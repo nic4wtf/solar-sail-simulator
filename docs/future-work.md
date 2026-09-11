@@ -30,8 +30,8 @@ The area prefixes group related work; they carry no priority.
 
 | Change | Bump | Example |
 | --- | --- | --- |
-| A feature — one tag from this document lands | **MINOR** | 1.3.0 → 1.4.0 |
-| A bug fix, correction or doc-only change | **PATCH** | 1.3.0 → 1.3.1 |
+| A feature — one tag from this document lands | **MINOR** | 1.4.0 → 1.5.0 |
+| A bug fix, correction or doc-only change | **PATCH** | 1.4.0 → 1.4.1 |
 | A change that breaks saved configurations | **MAJOR** | 1.x.y → 2.0.0 |
 
 The major bump is tied to one concrete thing: the `version` field in a saved
@@ -59,6 +59,7 @@ Every release names the tags it contains in its git tag annotation, so
 | `EPH-PLANETS` | Planetary ephemerides (Standish elements) | 1.3.0 |
 | `FRAME-HELIO` | Sun as an integration centre, planets as third bodies | 1.3.0 |
 | `VIZ-SCALE` | Scale switching in the 3D and 2D views | 1.3.0 |
+| `UI-MOBILE` | Single-pane layout for phones and small tablets | 1.4.0 |
 
 ### Open
 
@@ -101,6 +102,7 @@ Every release names the tags it contains in its git tag annotation, so
 | `RAD-EARTH` | two `ForceToggles` fields, one `forces/albedo.ts`, sharing the flat-plate law with SRP | ~190 lines + 13 tests |
 | `GRAV-J3` | one function in `forces/gravity.ts`, one toggle | ~30 lines + 11 tests |
 | `EPH-PLANETS` + `FRAME-HELIO` + `VIZ-SCALE` | one `CentralBody` variant, one `environment/planets.ts`, one `ForceToggles` field, and a scale switch in the two views | ~700 lines + 71 tests |
+| `UI-MOBILE` | one store field, a bottom nav, and a media query | ~260 lines of CSS |
 
 The drag prediction was right about the physics and wrong about the scale of
 the consequence. It said LEO results were "incomplete" without drag. They were
@@ -126,6 +128,16 @@ only by a cross-check that compared the two Earths against each other.
 
 Details in [`earth-model.md`](earth-model.md) §6–§8 and
 [`interplanetary-model.md`](interplanetary-model.md).
+
+`UI-MOBILE` was the odd one out: it needed no new seam and no physics, but it
+exposed three latent layout bugs that the wide layout had been hiding. The
+shell was a grid with named rows while its child count varied, so the `1fr`
+row had been landing on the 1 px progress strip and the main area filled the
+window only by accident. The centre column's grid column was implicit, so a
+Plotly chart's min-content width could push the whole page sideways. And the
+timeline scrubber had **never been visible on any screen size** - it sat below
+a full-height canvas inside an `overflow: hidden` box. All three were fixed on
+the desktop layout too, because all three were wrong there as well.
 
 ---
 

@@ -52,6 +52,38 @@ Requires Node 20 or newer.
 
 ---
 
+## On a phone
+
+The layout adapts below 900 px to show **one working area at a time**, chosen
+from a bottom bar: **Build**, **View**, **Results**. Those are the same three
+columns the desktop layout shows side by side, so the mental model carries
+over.
+
+Three columns do not survive a phone by any arrangement — at 390 px each one
+gets a strip about a hundred pixels tall and the 3D view, which is the point
+of the tool, renders 25 px high. Showing one area at full size beats showing
+three useless ones.
+
+What changes on a narrow screen:
+
+- The top bar drops to a single row: identity, **Run**, play/pause, theme.
+- The playback rate moves from the top bar into the view's own toolbar, next
+  to the thing it controls.
+- Tab strips scroll sideways instead of wrapping, which would cost 80 px of
+  vertical space on every panel.
+- Controls grow to finger size, and text inputs are 16 px — below that iOS
+  zooms the page on focus and leaves it zoomed.
+- Dragging the 3D view orbits the camera instead of scrolling the page.
+- The charts drawer starts collapsed and never takes more than 45% of the
+  screen.
+- Pressing **Run** switches to the view, because that is what pressing Run
+  means.
+
+Landscape is handled separately: the constraint there is height rather than
+width, so the chrome gets thinner and the bottom bar goes horizontal.
+
+---
+
 ## Deploying to GitHub Pages
 
 Already live at **https://nic4wtf.github.io/solar-sail-simulator/**, published
@@ -562,8 +594,8 @@ The full index, with the seam each item plugs into, is in
 
 | Change | Bump |
 | --- | --- |
-| A feature — one tag lands | **MINOR** (1.3.0 → 1.4.0) |
-| A bug fix or correction | **PATCH** (1.3.0 → 1.3.1) |
+| A feature — one tag lands | **MINOR** (1.4.0 → 1.5.0) |
+| A bug fix or correction | **PATCH** (1.4.0 → 1.4.1) |
 | A change that breaks saved configurations | **MAJOR** (1.x.y → 2.0.0) |
 
 The major bump is tied to one concrete thing: whether `configFromJson` can
@@ -573,7 +605,8 @@ J3 and the entire heliocentric mode all shipped without breaking a saved file.
 **Shipped so far** — `ATM-EXP` (sail-coupled atmospheric drag), `RAD-EARTH`
 (Earth albedo and infrared), `GRAV-J3`, `UI-BUILDER` (one-screen mission
 builder), `EPH-PLANETS` (planetary ephemerides), `FRAME-HELIO` (the Sun as an
-integration centre), `VIZ-SCALE` (AU-scale visualisation).
+integration centre), `VIZ-SCALE` (AU-scale visualisation), `UI-MOBILE`
+(single-pane layout for phones).
 
 **Largest open items** — `ATM-MSIS` (a real thermosphere model, now the
 biggest uncertainty in any LEO result), `OPT-EVO` (trajectory optimisation),

@@ -77,6 +77,17 @@ function baseLayout(p: ThemePalette): Record<string, unknown> {
   };
 }
 
+/**
+ * Below this width the Plotly mode bar is hidden.
+ *
+ * Its buttons are 22 px tall - too small to hit reliably - and it floats over
+ * the top-right of a chart that is only a few hundred pixels wide to begin
+ * with, covering the traces it is meant to help you inspect. Pinch-zoom and
+ * drag still work on the plot itself, which is what a touch user reaches for
+ * anyway.
+ */
+const MODEBAR_MIN_WIDTH = 900;
+
 const CONFIG: Record<string, unknown> = {
   displaylogo: false,
   responsive: true,
@@ -84,6 +95,13 @@ const CONFIG: Record<string, unknown> = {
   modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d'],
   toImageButtonOptions: { format: 'png', filename: 'solar-sail-plot', scale: 2 },
 };
+
+/** Config for the current viewport. */
+function configFor(): Record<string, unknown> {
+  const narrow =
+    typeof window !== 'undefined' && window.innerWidth < MODEBAR_MIN_WIDTH;
+  return narrow ? { ...CONFIG, displayModeBar: false } : CONFIG;
+}
 
 export interface PlotProps {
   data: unknown[];
@@ -128,7 +146,7 @@ export function Plot({ data, layout = {}, height = 220, className }: PlotProps) 
     // `react` updates an existing plot in place and creates one if absent, so
     // the same call handles both mount and update - including a theme change,
     // which arrives here as a new `palette` and redraws with new axis colours.
-    void Plotly.react(el, data, merged, CONFIG);
+    void Plotly.react(el, data, merged, configFor());
   }, [data, layout, height, palette]);
 
   useEffect(() => {

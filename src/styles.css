@@ -196,16 +196,48 @@ body {
 /* App shell                                                          */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Flex column, not a grid with named rows.
+ *
+ * The shell's children are not a fixed list: `TopBar` renders a fragment of
+ * the bar, the progress strip and - only sometimes - a run-error notice, and
+ * the bottom navigation appears only on a narrow screen. With
+ * `grid-template-rows: auto 1fr` the 1fr row therefore landed on the 1 px
+ * PROGRESS STRIP, and the main area got an implicit `auto` row that sized to
+ * its content. It filled the window only because something deep inside
+ * happened to stretch - and the moment that stopped being true, the whole
+ * layout collapsed to a hundred pixels at the bottom of the screen.
+ *
+ * Flex makes the intent explicit and survives the child count changing.
+ */
 .app {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   height: 100%;
+  min-height: 0;
+}
+
+/* Chrome rows keep their natural height; the main area takes the rest. */
+.app > * {
+  flex: 0 0 auto;
+}
+
+.app > .app-main {
+  flex: 1 1 0;
   min-height: 0;
 }
 
 .app-main {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr) 340px;
+  /*
+   * One row, explicitly the full height. Leaving the row implicit makes it
+   * `auto`, which sizes to content - the columns then only fill the window
+   * because something inside happens to stretch, which is a property no
+   * layout should depend on. Naming the row makes the panes fill by
+   * construction.
+   */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
 }
@@ -214,6 +246,14 @@ body {
 .centre-column {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  /*
+   * The column must be declared, not implicit. An implicit grid column is
+   * sized to its content, and Plotly reports a min-content width of ~460 px
+   * for a chart - so the charts drawer was widening this column past its own
+   * grid area and pushing the whole page sideways. `min-width: 0` on the
+   * element does not help: the overflow is the COLUMN, not the box.
+   */
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--line);
@@ -226,17 +266,16 @@ body {
   }
 }
 
+/*
+ * Between 900 and 1100 px the three columns still fit, just narrowly. They are
+ * tightened rather than stacked: stacking them into one scrolling page is what
+ * the layout used to do below 1100 px, and it squeezed every row - the 3D view
+ * ended up 25 px tall on a phone. The single-pane layout further down handles
+ * everything narrower.
+ */
 @media (max-width: 1100px) {
   .app-main {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(320px, 50vh) auto;
-    overflow-y: auto;
-  }
-  .centre-column {
-    border: none;
-  }
-  body {
-    overflow: auto;
+    grid-template-columns: 250px minmax(0, 1fr) 250px;
   }
 }
 
@@ -905,12 +944,47 @@ textarea.text-input {
 /* Viewport (3D / 2D)                                                 */
 /* ------------------------------------------------------------------ */
 
+/*
+ * The viewport stacks the render surface above the timeline scrubber.
+ *
+ * It used to be a plain block with the render surface at `height: 100%` and
+ * the timeline after it, which put the timeline entirely below the box - and
+ * `overflow: hidden` then clipped it away. The scrubber has therefore never
+ * been visible. It matters most on a phone, where dragging the scrubber is
+ * the only way to move through the mission (there is no keyboard for the
+ * arrow-key stepping the desktop offers), so it is fixed here rather than
+ * left alone.
+ */
 .viewport {
   position: relative;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   min-width: 0;
   background: var(--viewport-bg);
   overflow: hidden;
+}
+
+/*
+ * The stage takes whatever the timeline does not, and is the positioning
+ * context for the toolbar, the HUD, the legend and the eclipse flag.
+ */
+.viewport-stage {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+.viewport-stage > .viewport-canvas,
+.viewport-stage > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.viewport > .timeline {
+  flex: 0 0 auto;
 }
 
 .viewport canvas {
@@ -1132,6 +1206,7 @@ textarea.text-input {
 
 .chart-box {
   width: 100%;
+  max-width: 100%;
 }
 
 .chart-grid {
@@ -1493,4 +1568,424 @@ textarea.text-input {
 .chip-off {
   color: var(--text-2);
   background: var(--bg-2);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Narrow displays: one working area at a time                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The desktop layout is three columns: configuration, the trajectory view,
+ * and results. Below 900 px that does not fit by any arrangement - at 390 px
+ * each column gets a strip about a hundred pixels tall and the 3D view, which
+ * is the entire point of the tool, renders 25 px high.
+ *
+ * So on a narrow display exactly ONE of the three is on screen, chosen from a
+ * bottom bar. That keeps every area full size rather than making all three
+ * useless, and the three destinations are the same three columns, so the
+ * mental model carries over from the desktop layout unchanged.
+ *
+ * `.desktop-only` and `.mobile-only` mark the few controls that move rather
+ * than shrink - chiefly the playback rate, which migrates from the top bar
+ * into the view's own toolbar.
+ */
+
+.mobile-nav,
+.mobile-only {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .app-main {
+    /*
+     * `minmax(0, 1fr)` rather than `1fr`: a grid column defaults to a minimum
+     * of its content width, so a wide Plotly chart in the charts drawer was
+     * stretching the view pane to 464 px inside a 390 px screen and taking the
+     * whole page sideways with it.
+     */
+    grid-template-columns: minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  /* Show only the pane the bottom bar has selected. */
+  .pane {
+    display: none;
+  }
+  .app-main[data-pane='build'] > .pane-build,
+  .app-main[data-pane='results'] > .pane-results {
+    display: flex;
+  }
+  .app-main[data-pane='view'] > .pane-view {
+    display: grid;
+  }
+
+  .centre-column {
+    border: none;
+  }
+
+  .desktop-only {
+    display: none !important;
+  }
+  .mobile-only {
+    display: flex;
+  }
+
+  /* ---------------- Top bar ---------------- */
+  /*
+   * One row, never wrapping. It used to wrap to three rows at 390 px and eat
+   * 128 px of a 844 px screen. What survives is what you cannot work without:
+   * the identity, Run, and transport.
+   */
+  .topbar {
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 6px 10px;
+  }
+
+  .brand {
+    min-width: 0;
+    margin-right: 0;
+  }
+
+  .brand-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 13px;
+  }
+
+  .brand-version {
+    display: none;
+  }
+
+  /* Theme becomes icon-only; the glyphs already carry the meaning. */
+  .seg-label,
+  .seg-btn-text {
+    display: none;
+  }
+
+  .run-controls {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  /* ---------------- Tap targets ---------------- */
+  /*
+   * The desktop controls are 26 px tall, which is comfortably below the ~44 px
+   * a fingertip needs. Everything interactive grows; nothing else does.
+   */
+  .btn {
+    min-height: 38px;
+    padding: 8px 14px;
+    font-size: 13px;
+  }
+
+  .btn-sm {
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+
+  .btn-icon {
+    min-width: 38px;
+    padding: 8px 10px;
+  }
+
+  .panel-tab {
+    min-height: 40px;
+    padding: 8px 12px;
+    font-size: 13px;
+  }
+
+  .seg button {
+    min-height: 34px;
+    padding: 6px 10px;
+  }
+
+  .check-field input[type='checkbox'] {
+    width: 20px;
+    height: 20px;
+  }
+
+  .info-btn {
+    min-width: 24px;
+    min-height: 24px;
+  }
+
+  /*
+   * 16 px is the threshold below which iOS Safari zooms the page in when a
+   * field takes focus, and then leaves it zoomed. Every text input therefore
+   * gets exactly 16 px here regardless of the desktop scale.
+   */
+  .num-input,
+  .select-input,
+  .text-input {
+    font-size: 16px;
+    min-height: 42px;
+  }
+
+  .num-slider,
+  .timeline-scrub,
+  .rate-slider {
+    height: 32px;
+  }
+
+  /* ---------------- Panels ---------------- */
+  /*
+   * Tab strips scroll sideways rather than wrapping. Five tabs wrapped to two
+   * rows costs 80 px of vertical space on every panel; a horizontal scroll
+   * costs none, and the active tab is always the one in view.
+   */
+  .panel-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    /*
+     * Both of these are load-bearing.
+     *
+     * `flex-shrink: 0` because the panel is a flex column whose body is
+     * thousands of pixels of content: without it flexbox absorbs the overflow
+     * by crushing the tab strip, which collapsed to 7 px.
+     *
+     * And once `overflow-x` is `auto`, the `visible` on the other axis
+     * computes to `auto` too - so a crushed strip does not merely look thin,
+     * it CLIPS the 40 px tab buttons out of existence. That is what made the
+     * tabs disappear entirely rather than just look wrong.
+     */
+    flex-shrink: 0;
+  }
+
+  .panel-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .panel-tab {
+    flex: 0 0 auto;
+  }
+
+  .panel-body {
+    padding: 12px 12px 20px;
+  }
+
+  /* Paired fields stack: two 4-em-wide number inputs side by side are not
+     readable at this width, and the labels wrap to three lines each. */
+  .field-row {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  /* ---------------- Viewport ---------------- */
+  .viewport-toolbar {
+    top: 6px;
+    left: 6px;
+    right: 6px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .viewport-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .viewport-toolbar > * {
+    flex: 0 0 auto;
+  }
+
+  /*
+   * Dragging the 3D view must orbit the camera, not scroll the page. Three.js
+   * OrbitControls handles touch itself, but the browser will still claim the
+   * gesture for scrolling unless the element opts out.
+   */
+  .viewport canvas {
+    touch-action: none;
+  }
+
+  /*
+   * The eclipse flag sits top-right, which is where the camera buttons end up
+   * once the toolbar is scrolling horizontally. Drop it below the toolbar row.
+   */
+  .eclipse-flag {
+    top: 48px;
+    right: 6px;
+  }
+
+  .hud {
+    font-size: 10px;
+    line-height: 1.5;
+    min-width: 0;
+    max-width: 62%;
+    padding: 6px 8px;
+    left: 6px;
+    bottom: 6px;
+    /*
+     * The HUD is a fixed twelve rows, about 215 px. Once the charts drawer is
+     * open the view is only ~250 px tall and the HUD reaches up into the
+     * toolbar. Capping it below the toolbar and letting it scroll keeps every
+     * row reachable without ever covering a control.
+     */
+    max-height: calc(100% - 104px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  /*
+   * The vector legend and the HUD both sit along the bottom edge and would
+   * overlap below about 600 px. The HUD carries live numbers and the legend
+   * is a static key, so the legend is the one that goes; the Physics / Model
+   * tab documents the same colours.
+   */
+  .legend {
+    display: none;
+  }
+
+  .timeline {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  /* ---------------- Charts ---------------- */
+  .charts-head {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* Same flex-shrink trap as .panel-tabs above. */
+    flex-shrink: 0;
+  }
+
+  /* The drawer toggle is the only way back to the charts once collapsed, so
+     it needs a finger-sized target rather than a 19 px text button. */
+  .drawer-toggle {
+    min-height: 36px;
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .charts-head::-webkit-scrollbar {
+    display: none;
+  }
+
+  .charts-head > * {
+    flex: 0 0 auto;
+  }
+
+  .charts-body {
+    padding: 4px 4px 8px;
+  }
+
+  /*
+   * The drawer never takes more than 45% of the screen height.
+   *
+   * Without a cap the charts row is sized to its content - a 252 px plot plus
+   * its head - which on a phone in landscape leaves the 3D view about 9 px
+   * tall. That is the exact failure this whole layout exists to fix, so it
+   * must not be reachable by opening a drawer. The body scrolls instead.
+   *
+   * The unit has to be `vh`, not `%`. A percentage max-height on a grid item
+   * resolves against the row it is sizing, which is circular, so the browser
+   * ignores it for row sizing and applies it only to the painted box - the
+   * row stayed 290 px tall while the drawer inside it shrank to 181 px, and
+   * the viewport still got nothing. `vh` is definite, so the row respects it.
+   */
+  .charts {
+    max-height: 45vh;
+  }
+
+  /* ---------------- Bottom navigation ---------------- */
+  .mobile-nav {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    background: var(--bg-1);
+    border-top: 1px solid var(--line);
+    /* Clear the home indicator on a notched phone. */
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+
+  .mobile-nav-btn {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-height: 52px;
+    padding: 6px 4px;
+    background: none;
+    border: none;
+    border-top: 2px solid transparent;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .mobile-nav-btn.active {
+    color: var(--text-0);
+    border-top-color: var(--accent);
+    background: var(--bg-2);
+  }
+
+  .mobile-nav-glyph {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  .mobile-nav-label {
+    letter-spacing: 0.02em;
+  }
+
+  /* "The configuration has moved on since the last run" - the top bar says so
+     in words on a wide screen, and there is no room for that here. */
+  .mobile-nav-dot {
+    position: absolute;
+    top: 8px;
+    right: 50%;
+    margin-right: -22px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--warn);
+  }
+}
+
+/*
+ * Very narrow phones (iPhone SE and similar). The top bar is the only thing
+ * that genuinely runs out of room; everything else already flexes.
+ */
+@media (max-width: 400px) {
+  .topbar {
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .brand-name {
+    font-size: 12px;
+  }
+
+  .btn {
+    padding: 8px 10px;
+  }
+}
+
+/*
+ * Landscape on a phone: the screen is short rather than narrow, so the
+ * constraint inverts. Keep the single-pane layout but give the vertical space
+ * back to the content.
+ */
+@media (max-width: 900px) and (max-height: 480px) {
+  .topbar {
+    padding: 4px 10px;
+  }
+
+  .mobile-nav-btn {
+    flex-direction: row;
+    gap: 6px;
+    min-height: 40px;
+  }
+
+  .hud {
+    font-size: 9.5px;
+    max-width: 40%;
+  }
 }

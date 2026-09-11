@@ -47,9 +47,16 @@ export function Viewport() {
 
   return (
     <div className="viewport">
-      {viewMode === '3d' ? <Scene3D /> : <View2D />}
+      {/*
+        The stage holds the render surface and everything that floats over it.
+        It exists so those overlays position against the CANVAS rather than
+        against the whole viewport - otherwise the HUD, which is pinned to the
+        bottom, sits on top of the timeline scrubber below it.
+      */}
+      <div className="viewport-stage">
+        {viewMode === '3d' ? <Scene3D /> : <View2D />}
 
-      <div className="viewport-toolbar">
+        <div className="viewport-toolbar">
         <div className="seg">
           <button
             className={viewMode === '3d' ? 'active' : ''}
@@ -104,6 +111,14 @@ export function Viewport() {
           </div>
         )}
 
+        {/* The playback rate lives in the top bar on a wide screen. There is
+            no room for it there on a phone, so it appears here instead - next
+            to the thing it controls, which is arguably where it belonged all
+            along. */}
+        <div className="mobile-only">
+          <PlaybackRateControl />
+        </div>
+
         <div className="seg">
           <button className={showVectors ? 'active' : ''} onClick={toggleVectors}>
             Vectors
@@ -121,9 +136,11 @@ export function Viewport() {
         </div>
       </div>
 
-      <EclipseFlag />
-      <Hud />
-      {showVectors && <Legend />}
+        <EclipseFlag />
+        <Hud />
+        {showVectors && <Legend />}
+      </div>
+
       <Timeline />
     </div>
   );
